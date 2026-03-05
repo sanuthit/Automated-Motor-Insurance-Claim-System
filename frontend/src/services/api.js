@@ -20,7 +20,7 @@ export const insuranceAPI = {
 
   getVehicleModels: () => api.get('/vehicles/models'),
   getVehicleTypes:  () => api.get('/vehicles/types'),
-  getPoliciesList:  () => api.get('/policies/list'),
+  getPoliciesList:  (q = '', limit = 20) => api.get(`/policies/list?q=${encodeURIComponent(q)}&limit=${limit}`),
 
   registerPolicy: (data) => api.post('/policy/register', data),
   issuePolicy:    (data) => api.post('/policy/issue', data),

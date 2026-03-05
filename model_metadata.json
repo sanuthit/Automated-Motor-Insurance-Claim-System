@@ -1,0 +1,114 @@
+{
+  "_meta": {
+    "description": "Motor Insurance Risk-Based Premium System \u2014 ML Model Governance Record",
+    "author": "IT22271600",
+    "system": "MotorInsure AI v3.0"
+  },
+  "model_version": "3.2-deterministic-targets",
+  "trained_at": "2026-03-04T23:27:50.067636",
+  "generated_at": "2026-03-05T17:04:58.742477",
+  "dataset": {
+    "name": "DS2_Motor_Insurance_Sri_Lanka",
+    "n_training_records": 33493,
+    "base_accident_rate": 0.3514,
+    "label_strategy": "Deterministic risk labels (not random) \u2014 no data leakage"
+  },
+  "risk_classifier": {
+    "model_class": "CalibratedClassifierCV",
+    "base_estimator": "HistGradientBoostingClassifier",
+    "calibration": "CalibratedClassifierCV (isotonic)",
+    "auc_roc": 0.7471,
+    "brier_score": 0.1851,
+    "optimal_threshold": 0.35,
+    "threshold_strategy": "Cost-sensitive \u2014 minimises expected loss (FN cost = 3\u00d7 FP cost)",
+    "features": [
+      "Driver_Age",
+      "Years_Driving_Experience",
+      "Experience_Rate",
+      "Age_x_Exp",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Is_New_Driver",
+      "Is_Exp_Driver",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "CC_x_VehicleAge",
+      "High_CC",
+      "Old_Vehicle",
+      "Previous_NCB_Percentage",
+      "High_NCB",
+      "Gender_enc",
+      "Vehicle_Type_enc",
+      "Occupation_enc",
+      "Province_enc",
+      "Vehicle_Condition_enc"
+    ],
+    "feature_importance": [],
+    "notes": [
+      "Had_Accident generated from deterministic risk function (not random)",
+      "Risk_Score computed from features (not random normal)",
+      "Premium predicts rate_pct (not raw premium) to avoid SI leakage",
+      "Market_Value_LKR and Sum_Insured_LKR excluded from risk features"
+    ]
+  },
+  "rate_model": {
+    "model_class": "GradientBoostingRegressor",
+    "target": "rate_pct (premium as % of sum insured)",
+    "r2_score": 0.9952,
+    "features": [
+      "Driver_Age",
+      "Years_of_Driving_Experience",
+      "Experience_Rate",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "Vehicle_Type_enc",
+      "Province_enc",
+      "Occupation_enc",
+      "NCB_Claimed_Percentage",
+      "Is_Blacklisted",
+      "Is_Existing_Customer",
+      "Risk_Score",
+      "SI_MV_Ratio",
+      "Rebate_Approved"
+    ],
+    "no_leakage_note": "Market_Value_LKR and Sum_Insured_LKR excluded from features to prevent leakage"
+  },
+  "renewal_model": {
+    "model_class": "HistGradientBoostingRegressor",
+    "target": "renewal_premium_LKR",
+    "r2_score": 0.9901,
+    "features": [
+      "Previous_Premium_LKR",
+      "Previous_NCB_Percentage",
+      "New_NCB_Percentage",
+      "Number_of_Claims",
+      "Total_Claim_Amount_Last_Year_LKR",
+      "Highest_Claim_Amount_LKR",
+      "Days_Since_Last_Claim",
+      "Vehicle_Current_Age",
+      "Driver_Age",
+      "Years_With_Company",
+      "Sum_Insured_Inline_Market",
+      "Claim_Frequency_Pattern_enc"
+    ]
+  },
+  "actuarial_config": {
+    "actuarial_table_file": "actuarial_table.json",
+    "blend_weights": {
+      "actuarial": 0.35,
+      "ml": 0.65
+    },
+    "expected_severity_lkr": 725796,
+    "pure_premium_formula": "E[Loss] = P(claim) \u00d7 E[severity | claim]"
+  },
+  "governance": {
+    "drift_monitor": "PSI \u2264 0.10 (stable)",
+    "retraining_trigger": "PSI > 0.20 or AUC drops > 0.05",
+    "model_review_cycle": "Annual (aligned with rate revision)",
+    "explainability": "Rule-based SHAP approximation (feature-level attribution)",
+    "fairness_note": "Gender excluded from rate model. Province loading capped.",
+    "min_premium_lkr": 15000
+  }
+}

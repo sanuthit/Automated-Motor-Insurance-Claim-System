@@ -177,3 +177,28 @@ async def dashboard_stats():
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/governance/metadata")
+async def model_governance_metadata():
+    """Return full model governance record — version, metrics, features, actuarial config."""
+    try:
+        import json
+        from pathlib import Path
+        meta_path = Path(__file__).resolve().parents[2] / "models" / "model_metadata.json"
+        act_path  = Path(__file__).resolve().parents[2] / "models" / "actuarial_table.json"
+        meta = {}
+        act  = {}
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+        if act_path.exists():
+            with open(act_path) as f:
+                act = json.load(f)
+        return {
+            "model_metadata":   meta,
+            "actuarial_table":  act,
+            "status":           "loaded" if meta else "missing"
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "error"}
