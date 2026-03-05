@@ -68,14 +68,15 @@ async def predict_premium(req: PolicyRequest):
     result.setdefault("doc_complete", True)
     result.setdefault("ncb_pct", float(req.prev_ncb))
     result.setdefault("breakdown", {})
-    result.setdefault("explanation", {"available": False})
 
-    # Try to add SHAP explanation
-    if engine.is_ready() and not result.get("explanation", {}).get("available"):
-        try:
-            result["explanation"] = engine.explain(proposal)
-        except Exception:
-            pass
+    # Always ensure explanation is populated — rule-based fallback if ML not available
+    if not result.get("explanation", {}).get("available"):
+        result["explanation"] = {
+            "available": True,
+            "is_ml_shap": False,
+            "note": "Rule-based explanation — train ML pipeline for real SHAP values",
+            "top_drivers": _build_shap_reasons(proposal, result.get("risk_score", 50)),
+        }
 
     return result
 

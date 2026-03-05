@@ -37,7 +37,7 @@ export default function Dashboard() {
   const featImp    = stats?.feature_importance || []
   const vehTypes   = stats?.vehicle_types || []
 
-  // Province filter applied to province table
+  // Province filter applied to all charts
   const filteredProv = useMemo(() => {
     let data = [...provRisk]
     if (filterProvince !== 'All') data = data.filter(p => p.province === filterProvince)
@@ -53,13 +53,29 @@ export default function Dashboard() {
     return vehTypes.filter(v => v.name === filterVehicle)
   }, [vehTypes, filterVehicle])
 
+  // Age risk filtered by risk level
+  const filteredAgeRisk = useMemo(() => {
+    if (filterRisk === 'All') return ageRisk
+    if (filterRisk === 'High')   return ageRisk.filter(r => r.avg_risk >= 70)
+    if (filterRisk === 'Medium') return ageRisk.filter(r => r.avg_risk >= 40 && r.avg_risk < 70)
+    return ageRisk.filter(r => r.avg_risk < 40)
+  }, [ageRisk, filterRisk])
+
+  // Filtered KPIs from province data
+  const filteredKpis = useMemo(() => {
+    const activeProv = filterProvince === 'All' ? provRisk : provRisk.filter(p => p.province === filterProvince)
+    const totalPolicies = filterProvince === 'All' ? stats?.total_policies : activeProv.reduce((s,p) => s + (p.policy_count||0), 0)
+    const totalClaims   = activeProv.reduce((s,p) => s + (p.claim_count||0), 0)
+    return { totalPolicies, totalClaims }
+  }, [provRisk, filterProvince, stats])
+
   const provinces  = ['All', ...provRisk.map(p => p.province)]
   const vehicleOpts = ['All', ...vehTypes.map(v => v.name)]
 
   if (loading) return <div className="loading-overlay"><div className="spinner" /></div>
 
   const kpis = [
-    { label: 'Total Policies',   value: stats?.total_policies?.toLocaleString() || '—',        icon: FileText,      color: '#0f4c81', bg: '#eff6ff' },
+    { label: 'Total Policies',   value: filteredKpis.totalPolicies?.toLocaleString() || '—',        icon: FileText,      color: '#0f4c81', bg: '#eff6ff' },
     { label: 'Avg Premium (LKR)',value: stats?.avg_premium ? `Rs.${(stats.avg_premium/1000).toFixed(0)}K` : '—', icon: TrendingUp, color: '#1a7a4a', bg: '#f0fdf4' },
     { label: 'Claim Approval',   value: stats?.claim_approval_rate != null ? `${stats.claim_approval_rate.toFixed(1)}%` : '—', icon: CheckCircle, color: '#1a7a4a', bg: '#f0fdf4' },
     { label: 'Avg Claim (LKR)',  value: stats?.avg_claim_amount ? `Rs.${(stats.avg_claim_amount/1000).toFixed(0)}K` : '—', icon: Shield, color: '#e8a020', bg: '#fffbeb' },
@@ -127,15 +143,18 @@ export default function Dashboard() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
         {/* Age Group vs Risk */}
         <div className="card">
-          <div className="card-header"><span className="card-title">🎂 Driver Age vs Risk Score</span></div>
+          <div className="card-header">
+            <span className="card-title">🎂 Driver Age vs Risk Score</span>
+            {filterRisk !== 'All' && <span style={{fontSize:11,color:'#2563eb',marginLeft:8}}>Filtered: {filterRisk} Risk</span>}
+          </div>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={ageRisk}>
+            <BarChart data={filteredAgeRisk}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="age_group" tick={{ fontSize:12 }} label={{ value:'Age Group (years)', position:'insideBottom', offset:-2, fontSize:11, fill:'#94a3b8' }} />
               <YAxis domain={[0,100]} tick={{ fontSize:12 }} label={{ value:'Avg Risk Score', angle:-90, position:'insideLeft', fontSize:11, fill:'#94a3b8' }} />
               <Tooltip formatter={(v) => [`${Number(v).toFixed(1)}`, 'Avg Risk Score']} />
               <Bar dataKey="avg_risk" radius={[4,4,0,0]} name="Avg Risk Score">
-                {ageRisk.map((e, i) => (
+                {filteredAgeRisk.map((e, i) => (
                   <Cell key={i} fill={e.avg_risk >= 70 ? '#c0392b' : e.avg_risk >= 50 ? '#e8a020' : '#1a7a4a'} />
                 ))}
               </Bar>

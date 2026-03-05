@@ -16,6 +16,13 @@ function RiskGauge({ score }) {
   if (score == null) return null;
   const level = score < 25 ? "Low" : score < 50 ? "Moderate" : score < 70 ? "High" : "Very High";
   const color = score < 25 ? "#16a34a" : score < 50 ? "#f59e0b" : score < 70 ? "#ea580c" : "#dc2626";
+  const approvedClaims = claims.filter(c =>
+    (c.claim_status || "").toLowerCase().includes("approv") ||
+    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
+  );
+  const totalApproved = approvedClaims.reduce((s, c) => s + Number(c.approved_amount_lkr || c.approved_amount || c.claim_amount || 0), 0);
+  const approvedCount = approvedClaims.length;
+
   return (
     <div style={{ textAlign: "center", padding: 16 }}>
       <svg width={140} height={140} viewBox="0 0 140 140">
@@ -170,13 +177,7 @@ export default function Renewal() {
     } finally {
       setRenewLoading(false);
     }
-  };(
-    (c.claim_status || "").toLowerCase().includes("approv") ||
-    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
-);
-  const totalApproved  = approvedClaims.reduce((s, c) => s + Number(c.approved_amount_lkr || c.approved_amount || c.claim_amount || 0), 0);
-  const approvedCount  = approvedClaims.length;
-
+  };
   return (
     <div style={{ padding: 24, fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh" }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, color: "#0f172a", margin: "0 0 4px" }}>Policy Renewal</h1>
