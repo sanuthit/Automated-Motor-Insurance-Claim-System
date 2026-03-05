@@ -1,0 +1,43 @@
+{
+  "folders": [
+    { "name": "Insurance Project", "path": "." }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "jupyter.notebookFileRoot": "${workspaceFolder}/notebooks",
+    "editor.formatOnSave": true,
+    "editor.fontSize": 14,
+    "files.associations": {
+      "*.ipynb": "jupyter-notebook"
+    },
+    "python.analysis.typeCheckingMode": "basic",
+    "notebook.cellToolbarLocation": {
+      "default": "right",
+      "jupyter-notebook": "left"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-toolsai.jupyter",
+      "ms-toolsai.jupyter-keymap",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "bradlc.vscode-tailwindcss"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "FastAPI Backend",
+        "type": "python",
+        "request": "launch",
+        "module": "uvicorn",
+        "args": ["backend.api.main:app", "--reload", "--port", "8000"],
+        "cwd": "${workspaceFolder}",
+        "env": { "PYTHONPATH": "${workspaceFolder}" }
+      }
+    ]
+  }
+}
