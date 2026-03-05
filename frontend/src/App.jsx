@@ -2,20 +2,22 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, FileText, RefreshCw, Shield,
-  Brain, ChevronRight, Activity
+  Brain, Activity, Zap
 } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import NewPolicy from './pages/NewPolicy'
 import Renewal from './pages/Renewal'
 import Claims from './pages/Claims'
-import MLInsights from './pages/MLInsights'
+import ShapInsights from './pages/ShapInsights'
+import RiskSimulator from './pages/RiskSimulator'
 
 const NAV = [
-  { path: '/',          label: 'Dashboard',      icon: LayoutDashboard },
-  { path: '/policy',    label: 'New Policy',      icon: FileText },
-  { path: '/renewal',   label: 'Policy Renewal',  icon: RefreshCw },
-  { path: '/claims',    label: 'Claims',          icon: Shield },
-  { path: '/ml',        label: 'ML Insights',     icon: Brain },
+  { path: '/',          label: 'Dashboard',       icon: LayoutDashboard },
+  { path: '/policy',    label: 'New Policy',       icon: FileText },
+  { path: '/renewal',   label: 'Policy Renewal',   icon: RefreshCw },
+  { path: '/claims',    label: 'Claims',           icon: Shield },
+  { path: '/shap',      label: 'SHAP Importance',  icon: Brain },
+  { path: '/simulator', label: 'Risk Simulator',   icon: Zap },
 ]
 
 export default function App() {
@@ -55,11 +57,12 @@ export default function App() {
         </aside>
         <main className="main-content">
           <Routes>
-            <Route path="/"        element={<Dashboard />} />
-            <Route path="/policy"  element={<NewPolicy />} />
-            <Route path="/renewal" element={<Renewal />} />
-            <Route path="/claims"  element={<Claims />} />
-            <Route path="/ml"      element={<MLInsights />} />
+            <Route path="/"          element={<Dashboard />} />
+            <Route path="/policy"    element={<NewPolicy />} />
+            <Route path="/renewal"   element={<Renewal />} />
+            <Route path="/claims"    element={<Claims />} />
+            <Route path="/shap"      element={<ShapInsights />} />
+            <Route path="/simulator" element={<RiskSimulator />} />
           </Routes>
         </main>
       </div>

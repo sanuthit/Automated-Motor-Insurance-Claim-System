@@ -16,6 +16,13 @@ function RiskGauge({ score }) {
   if (score == null) return null;
   const level = score < 25 ? "Low" : score < 50 ? "Moderate" : score < 70 ? "High" : "Very High";
   const color = score < 25 ? "#16a34a" : score < 50 ? "#f59e0b" : score < 70 ? "#ea580c" : "#dc2626";
+  const approvedClaims = claims.filter(c =>
+    (c.claim_status || "").toLowerCase().includes("approv") ||
+    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
+  );
+  const totalApproved = approvedClaims.reduce((s, c) => s + Number(c.approved_amount_lkr || c.approved_amount || c.claim_amount || 0), 0);
+  const approvedCount = approvedClaims.length;
+
   return (
     <div style={{ textAlign: "center", padding: 16 }}>
       <svg width={140} height={140} viewBox="0 0 140 140">
@@ -80,6 +87,9 @@ export default function Renewal() {
   const [calcLoading, setCalcLoading]   = useState(false);
   const [calcErr, setCalcErr]           = useState("");
   const [result, setResult]             = useState(null);
+  const [renewLoading, setRenewLoading] = useState(false);
+  const [renewErr, setRenewErr]         = useState("");
+  const [renewed, setRenewed]           = useState(null);
 
   const fetchPolicy = async () => {
     if (!searchId.trim()) { setFetchErr("Please enter a Policy ID"); return; }
@@ -151,13 +161,23 @@ export default function Renewal() {
     }
   };
 
-  const approvedClaims = claims.filter(c =>
-    (c.claim_status || "").toLowerCase().includes("approv") ||
-    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
-  );
-  const totalApproved  = approvedClaims.reduce((s, c) => s + Number(c.approved_amount_lkr || c.approved_amount || c.claim_amount || 0), 0);
-  const approvedCount  = approvedClaims.length;
-
+  const renewPolicy = async () => {
+    if (!result) return;
+    setRenewLoading(true); setRenewErr(""); setRenewed(null);
+    try {
+      const res = await insuranceAPI.processRenewal({
+        policy_id:            policy.policy_id || searchId.trim().toUpperCase(),
+        renewal_premium:      result.renewal_premium || result.gross_premium,
+        new_ncb:              Number(result.new_ncb ?? newNCB),
+        proposed_sum_insured: Number(newSI),
+      });
+      setRenewed(res.data);
+    } catch (e) {
+      setRenewErr(safe(e));
+    } finally {
+      setRenewLoading(false);
+    }
+  };
   return (
     <div style={{ padding: 24, fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh" }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, color: "#0f172a", margin: "0 0 4px" }}>Policy Renewal</h1>
@@ -369,16 +389,49 @@ export default function Renewal() {
                       ))}
                     </div>
                   )}
+
+                  {/* Renew Policy button */}
+                  {!renewed ? (
+                    <div style={{ marginTop: 16 }}>
+                      <button onClick={renewPolicy} disabled={renewLoading}
+                        style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none",
+                          background: renewLoading ? "#94a3b8" : "#16a34a", color: "#fff",
+                          fontWeight: 700, fontSize: 15, cursor: renewLoading ? "not-allowed" : "pointer" }}>
+                        {renewLoading ? "Processing..." : "✅ Renew Policy"}
+                      </button>
+                      {renewErr && (
+                        <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2",
+                          border: "1px solid #fca5a5", borderRadius: 8, color: "#dc2626", fontSize: 12 }}>
+                          ⚠ {renewErr}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 16, padding: "12px 16px", background: "#f0fdf4",
+                      border: "1px solid #86efac", borderRadius: 10 }}>
+                      <div style={{ fontWeight: 700, color: "#166534", marginBottom: 4 }}>
+                        ✅ Policy Renewed Successfully!
+                      </div>
+                      <div style={{ fontSize: 13, color: "#166534" }}>
+                        <strong>Renewal ID:</strong> {renewed.renewal_id}<br />
+                        <strong>Valid:</strong> {renewed.start_date} → {renewed.end_date}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Risk Assessment — always shows with fallback */}
               <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
+                <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9" }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>AI Risk Assessment</span>
+                  {result.explanation?.is_ml_shap === false && (
+                    <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 7px",
+                      borderRadius: 10, marginLeft: 8, fontWeight: 600 }}>Rule-based</span>
+                  )}
+                </div>
                 <RiskGauge score={result.risk_score} />
                 <ShapPanel explanation={result.explanation} />
-                {!result.risk_score && (
-                  <div style={{ padding: 16, color: "#64748b", fontSize: 13 }}>
-                    Risk score not available — train ML models first.
-                  </div>
-                )}
               </div>
             </div>
           )}

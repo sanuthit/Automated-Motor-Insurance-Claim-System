@@ -47,6 +47,14 @@ async def predict_premium(req: PolicyRequest):
     else:
         try:
             result = engine.calculate(proposal)
+            # Engine doesn't return base_premium — compute it from net + NCB
+            if "base_premium" not in result:
+                net = result.get("net_premium", 0)
+                ncb_pct = float(proposal.get("prev_ncb", 0))
+                # Reverse: net = base * (1 - ncb/100), so base = net / (1 - ncb/100)
+                denom = (1 - ncb_pct / 100) if ncb_pct < 100 else 1
+                result["base_premium"]  = int(net / denom) if denom > 0 else int(net)
+                result["ncb_discount"]  = result["base_premium"] - int(net)
         except Exception as e:
             # Still return something useful rather than 500
             result = _deterministic_premium(proposal)
@@ -60,14 +68,15 @@ async def predict_premium(req: PolicyRequest):
     result.setdefault("doc_complete", True)
     result.setdefault("ncb_pct", float(req.prev_ncb))
     result.setdefault("breakdown", {})
-    result.setdefault("explanation", {"available": False})
 
-    # Try to add SHAP explanation
-    if engine.is_ready() and not result.get("explanation", {}).get("available"):
-        try:
-            result["explanation"] = engine.explain(proposal)
-        except Exception:
-            pass
+    # Always ensure explanation is populated — rule-based fallback if ML not available
+    if not result.get("explanation", {}).get("available"):
+        result["explanation"] = {
+            "available": True,
+            "is_ml_shap": False,
+            "note": "Rule-based explanation — train ML pipeline for real SHAP values",
+            "top_drivers": _build_shap_reasons(proposal, result.get("risk_score", 50)),
+        }
 
     return result
 
@@ -178,6 +187,8 @@ def _deterministic_premium(p: dict) -> dict:
         },
         "explanation": {
             "available": True,
+            "is_ml_shap": False,
+            "note": "Rule-based explanation — train ML pipeline for real SHAP values",
             "top_drivers": _build_shap_reasons(p, risk),
         }
     }
