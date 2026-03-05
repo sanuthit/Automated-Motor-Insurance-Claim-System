@@ -1,0 +1,107 @@
+{
+  "risk": {
+    "features": [
+      "Driver_Age",
+      "Years_Driving_Experience",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "Sum_Insured_LKR",
+      "Previous_NCB_Percentage",
+      "Experience_Rate",
+      "Age_x_Exp",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Is_New_Driver",
+      "Log_SI",
+      "CC_x_VehicleAge",
+      "Occupation_cat",
+      "Province_cat"
+    ],
+    "feature_count": 15,
+    "target": "Had_Accident",
+    "dataset": "DS2",
+    "test_auc": 0.5097296004088889,
+    "test_pr_auc": 0.6373406232603657,
+    "test_brier": 0.2335529841600529,
+    "cv_auc_mean": 0.499447136208062,
+    "cv_auc_std": 0.008583600717282506
+  },
+  "premium": {
+    "features": [
+      "Proposed_Sum_Insured_LKR",
+      "Risk_Score",
+      "NCB_Claimed_Percentage",
+      "Driver_Age",
+      "Years_of_Driving_Experience",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "Market_Value_LKR",
+      "Vehicle_Condition_ord",
+      "SI_MV_Ratio",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Log_SI",
+      "Log_MV",
+      "Age_x_Exp",
+      "Experience_Rate",
+      "CC_x_VehicleAge",
+      "Is_Blacklisted",
+      "Rebate_Approved",
+      "Province_cat",
+      "Vehicle_Type_cat",
+      "Gender_cat",
+      "Occupation_cat"
+    ],
+    "feature_count": 23,
+    "target": "Calculated_Premium_LKR",
+    "dataset": "DS1",
+    "test_r2": 0.9973034489388976,
+    "test_mae": 10249.933794699275
+  },
+  "renewal": {
+    "features": [
+      "Previous_Premium_LKR",
+      "Previous_NCB_Percentage",
+      "New_NCB_Percentage",
+      "Number_of_Claims",
+      "Total_Claim_Amount_Last_Year_LKR",
+      "Claim_Pattern_ord",
+      "Highest_Claim_Amount_LKR",
+      "Days_Since_Last_Claim",
+      "Vehicle_Current_Age",
+      "Driver_Age",
+      "SI_Inline",
+      "Years_With_Company"
+    ],
+    "feature_count": 12,
+    "target": "Calculated_Renewal_Premium_LKR",
+    "dataset": "DS3",
+    "test_r2": 0.9836813639851488
+  },
+  "feature_encodings": {
+    "binary_cols": [
+      "Is_Existing_Customer",
+      "Is_Blacklisted",
+      "Images_Uploaded",
+      "Inspection_Report_Uploaded",
+      "Fair_Value_Proposed",
+      "Financial_Interest_Recorded",
+      "Registration_Book_Available",
+      "Rebate_Approved"
+    ],
+    "condition_map": {
+      "Poor": 0,
+      "Fair": 1,
+      "Good": 2,
+      "Excellent": 3
+    },
+    "claim_pattern_map": {
+      "No Claims": 0,
+      "Single Claim": 1,
+      "Multiple Claims": 2,
+      "Frequent Claimant": 3
+    }
+  },
+  "version": "3.0",
+  "trained_at": "2026-03-04T19:17:14.404247"
+}

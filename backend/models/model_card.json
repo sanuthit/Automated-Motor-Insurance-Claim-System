@@ -1,0 +1,224 @@
+{
+  "model_details": {
+    "name": "Motor Insurance Risk-Based Premium System",
+    "version": "3.0",
+    "student_id": "IT22271600",
+    "date": "2026-03-04",
+    "type": "Frequency-Severity + ML Hybrid",
+    "license": "Academic",
+    "contact": "IT22271600@student.university.ac.lk"
+  },
+  "model_architecture": {
+    "risk_classifier": {
+      "algorithm": "HistGradientBoostingClassifier",
+      "calibration": "CalibratedClassifierCV (isotonic, cv=5)",
+      "pipeline": "StandardScaler \u2192 Calibrated HGBC",
+      "features": [
+        "Driver_Age",
+        "Years_Driving_Experience",
+        "Engine_CC",
+        "Vehicle_Age_Years",
+        "Sum_Insured_LKR",
+        "Previous_NCB_Percentage",
+        "Experience_Rate",
+        "Age_x_Exp",
+        "Is_Young_Driver",
+        "Is_Senior_Driver",
+        "Is_New_Driver",
+        "Log_SI",
+        "CC_x_VehicleAge",
+        "Occupation_cat",
+        "Province_cat"
+      ],
+      "feature_count": 15,
+      "leakage_free": true
+    },
+    "premium_regressor": {
+      "algorithm": "HistGradientBoostingRegressor",
+      "pipeline": "StandardScaler \u2192 HGBR",
+      "features": [
+        "Proposed_Sum_Insured_LKR",
+        "Risk_Score",
+        "NCB_Claimed_Percentage",
+        "Driver_Age",
+        "Years_of_Driving_Experience",
+        "Engine_CC",
+        "Vehicle_Age_Years",
+        "Market_Value_LKR",
+        "Vehicle_Condition_ord",
+        "SI_MV_Ratio",
+        "Is_Young_Driver",
+        "Is_Senior_Driver",
+        "Log_SI",
+        "Log_MV",
+        "Age_x_Exp",
+        "Experience_Rate",
+        "CC_x_VehicleAge",
+        "Is_Blacklisted",
+        "Rebate_Approved",
+        "Province_cat",
+        "Vehicle_Type_cat",
+        "Gender_cat",
+        "Occupation_cat"
+      ],
+      "feature_count": 23
+    },
+    "actuarial_model": {
+      "frequency_model": "Calibrated HGBC \u2192 P(Claim)",
+      "severity_model": "HGBR",
+      "formula": "Pure Premium = P(Claim) \u00d7 E[Severity | Claim]",
+      "expected_severity_lkr": 2139428,
+      "loading_factors": {
+        "expense_ratio": 0.3,
+        "profit_margin": 0.05,
+        "stamp_duty": 0.01,
+        "vat": 0.06,
+        "cess": 0.005,
+        "min_rate_pct": 0.015
+      }
+    }
+  },
+  "performance_metrics": {
+    "risk_classifier": {
+      "roc_auc": 0.5097296004088889,
+      "pr_auc": 0.6373406232603657,
+      "brier_score": 0.2335529841600529,
+      "optimal_threshold": 0.45598666826079715,
+      "threshold_method": "Cost-sensitive optimization (C_FN=725K, C_FP=18K)",
+      "cv_auc_mean": 0.499447136208062
+    },
+    "premium_regressor": {
+      "r2": 0.9973034489388976,
+      "mae_lkr": 10249
+    },
+    "frequency_model": {
+      "freq_auc": 0.5021473468433444,
+      "freq_brier": 0.23345422874483393,
+      "freq_ece": 0.001961768819400972,
+      "freq_pr_auc": 0.6302464668460889
+    }
+  },
+  "training_data": {
+    "datasets": {
+      "DS1": {
+        "purpose": "Premium regression + risk score",
+        "source": {
+          "rows": 33493,
+          "cols": 35,
+          "hash": "64e8bcba93bc",
+          "numeric_means": {
+            "Driver_Age": 37.7777,
+            "Years_of_Driving_Experience": 15.4632,
+            "Vehicle_Year": 2016.5266,
+            "Vehicle_Age_Years": 7.4734,
+            "Engine_CC": 1853.4954
+          }
+        }
+      },
+      "DS2": {
+        "purpose": "Accident risk classification",
+        "source": {
+          "rows": 28069,
+          "cols": 20,
+          "hash": "3df53b316365",
+          "numeric_means": {
+            "Driver_Age": 37.745,
+            "Years_Driving_Experience": 15.4349,
+            "Vehicle_Age_Years": 7.477,
+            "Engine_CC": 1856.4381,
+            "Sum_Insured_LKR": 9144994.7049
+          }
+        }
+      },
+      "DS3": {
+        "purpose": "Renewal premium regression",
+        "source": {
+          "rows": 21990,
+          "cols": 28,
+          "hash": "11fdc2ba27cd",
+          "numeric_means": {
+            "Driver_Age": 38.8129,
+            "Years_With_Company": 4.0003,
+            "Vehicle_Current_Age": 8.4669,
+            "Previous_Sum_Insured_LKR": 9185926.3838,
+            "Current_Market_Value_LKR": 8403684.586
+          }
+        }
+      },
+      "DS4": {
+        "purpose": "Claims analysis + severity modeling",
+        "source": {
+          "rows": 33215,
+          "cols": 21,
+          "hash": "261aa3c7e475",
+          "numeric_means": {
+            "Vehicle_Year": 2016.5292,
+            "Vehicle_Age_Years": 7.4708,
+            "Engine_CC": 1848.6997,
+            "Insured_Value_LKR": 9095063.1666,
+            "Claim_Amount_LKR": 1659925.5835
+          }
+        }
+      }
+    },
+    "preprocessing_fixes": [
+      "Pipeline-based CV (no data leakage)",
+      "5-fold CV target encoding for Province/Occupation",
+      "OrdinalEncoder with explicit category ordering",
+      "HistGradientBoosting handles missing values natively",
+      "DerivedFeatureAdder transformer (no leakage)"
+    ]
+  },
+  "intended_use": {
+    "primary_use": "Motor insurance premium calculation for Sri Lankan market",
+    "intended_users": [
+      "Underwriters",
+      "Insurance agents",
+      "Policy holders"
+    ],
+    "out_of_scope": [
+      "Non-motor insurance products",
+      "Markets outside Sri Lanka",
+      "Vehicles >20 years old"
+    ]
+  },
+  "ethical_considerations": {
+    "fairness_note": "Model uses gender and age as features. Fairness analysis recommended before deployment.",
+    "transparency": "SHAP explanations provided per policy via API",
+    "appeal_mechanism": "Underwriters can override model decisions",
+    "regulatory": "Compliant with IBSL (Insurance Board of Sri Lanka) guidelines assumed"
+  },
+  "governance": {
+    "review_schedule": "Quarterly model performance review",
+    "drift_monitoring": "PSI (Population Stability Index) on key features monthly",
+    "retrain_trigger": "PSI > 0.2 or AUC drop > 0.03 vs baseline",
+    "approvers": [
+      "Chief Actuary",
+      "Head of Risk",
+      "IT22271600"
+    ]
+  },
+  "environment": {
+    "python_version": "3.14.2",
+    "sklearn_version": "1.8.0",
+    "pandas_version": "2.3.3",
+    "numpy_version": "2.4.0"
+  },
+  "version_history": [
+    {
+      "version": "1.0",
+      "date": "2024-01-01",
+      "notes": "Initial ML models \u2014 basic sklearn"
+    },
+    {
+      "version": "2.0",
+      "date": "2024-06-01",
+      "notes": "Added Pipeline wrappers, ROC-AUC primary"
+    },
+    {
+      "version": "3.0",
+      "date": "2026-03-04",
+      "notes": "Full pipeline artifacts, frequency-severity, SHAP, cost-sensitive threshold, governance"
+    }
+  ]
+}

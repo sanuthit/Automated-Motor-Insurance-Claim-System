@@ -1,0 +1,102 @@
+{
+  "created_at": "2026-03-04T19:30:43.432186",
+  "version": "3.0",
+  "student_id": "IT22271600",
+  "artifacts": {
+    "pipeline_artifacts.pkl": {
+      "path": "..\\backend\\models\\pipeline_artifacts.pkl",
+      "hash": "18d2ce0c692d5713",
+      "size_kb": 1233.3,
+      "created": "2026-03-04T19:17:14.413870"
+    },
+    "freq_sev_model.pkl": {
+      "path": "..\\backend\\models\\freq_sev_model.pkl",
+      "hash": "ac822ad6c82f47c3",
+      "size_kb": 234.3,
+      "created": "2026-03-04T19:23:14.369848"
+    },
+    "shap_explainer.pkl": {
+      "path": "..\\backend\\models\\shap_explainer.pkl",
+      "hash": "9a70083e4f97676e",
+      "size_kb": 415.8,
+      "created": "2026-03-04T19:27:59.560855"
+    },
+    "model_card.json": {
+      "path": "..\\backend\\models\\model_card.json",
+      "hash": "e92ea1b695b2f928",
+      "size_kb": 6.7,
+      "created": "2026-03-04T19:30:32.485490"
+    }
+  },
+  "model_metrics": {
+    "risk_auc": 0.5097296004088889,
+    "premium_r2": 0.9973034489388976,
+    "freq_brier": 0.23345422874483393,
+    "optimal_threshold": 0.45598666826079715
+  },
+  "retrain_criteria": {
+    "psi_threshold": 0.2,
+    "auc_drop_threshold": 0.03,
+    "schedule": "Quarterly",
+    "last_trained": "2026-03-04",
+    "next_review": "2026-06-01"
+  },
+  "feature_schema": {
+    "risk_features": [
+      "Driver_Age",
+      "Years_Driving_Experience",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "Sum_Insured_LKR",
+      "Previous_NCB_Percentage",
+      "Experience_Rate",
+      "Age_x_Exp",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Is_New_Driver",
+      "Log_SI",
+      "CC_x_VehicleAge",
+      "Occupation_cat",
+      "Province_cat"
+    ],
+    "premium_features": [
+      "Proposed_Sum_Insured_LKR",
+      "Risk_Score",
+      "NCB_Claimed_Percentage",
+      "Driver_Age",
+      "Years_of_Driving_Experience",
+      "Engine_CC",
+      "Vehicle_Age_Years",
+      "Market_Value_LKR",
+      "Vehicle_Condition_ord",
+      "SI_MV_Ratio",
+      "Is_Young_Driver",
+      "Is_Senior_Driver",
+      "Log_SI",
+      "Log_MV",
+      "Age_x_Exp",
+      "Experience_Rate",
+      "CC_x_VehicleAge",
+      "Is_Blacklisted",
+      "Rebate_Approved",
+      "Province_cat",
+      "Vehicle_Type_cat",
+      "Gender_cat",
+      "Occupation_cat"
+    ],
+    "renewal_features": [
+      "Previous_Premium_LKR",
+      "Previous_NCB_Percentage",
+      "New_NCB_Percentage",
+      "Number_of_Claims",
+      "Total_Claim_Amount_Last_Year_LKR",
+      "Claim_Pattern_ord",
+      "Highest_Claim_Amount_LKR",
+      "Days_Since_Last_Claim",
+      "Vehicle_Current_Age",
+      "Driver_Age",
+      "SI_Inline",
+      "Years_With_Company"
+    ]
+  }
+}

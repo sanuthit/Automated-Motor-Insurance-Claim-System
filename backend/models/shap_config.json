@@ -1,0 +1,29 @@
+{
+  "optimal_threshold": 0.45598666826079715,
+  "cost_savings": 513.9266120413249,
+  "metrics": {
+    "auc": 0.5021473468433444,
+    "pr_auc": 0.6302464668460889,
+    "brier": 0.23345422874483393,
+    "f1_at_optimal": 0.7721754347588319,
+    "recall_at_optimal": 0.9999999999997167
+  },
+  "feature_importance": {
+    "Driver_Age": 0.004943310544594429,
+    "Years_Driving_Experience": 0.008225712567793085,
+    "Engine_CC": 0.0009618768141791217,
+    "Vehicle_Age_Years": 0.006323674742035795,
+    "Sum_Insured_LKR": 0.003031028250902306,
+    "Previous_NCB_Percentage": 0.002771233727142677,
+    "Log_SI": 0.0,
+    "Exp_Rate": 0.00621621545397938,
+    "Age_x_Exp": 0.004425516823133221,
+    "Is_Young": 0.0,
+    "Is_Senior": 0.0,
+    "Is_New": 0.0,
+    "Gender_enc": 0.00028847549163969126,
+    "Vehicle_Type_enc": 0.0005255390662373997,
+    "Occupation_enc": 0.018467670969036423,
+    "Province_enc": 0.0019368681657430708
+  }
+}
