@@ -137,29 +137,70 @@ async def calculate_renewal(req: RenewalCalcRequest):
     number_of_claims    = len(claims)
     highest_claim       = max((c["claim_amount"] for c in claims), default=0)
     total_claim_amount  = sum(c["claim_amount"] for c in claims)
+    last_claim_days     = 999
+    if claims:
+        try:
+            from datetime import date as _d
+            last_date = _d.fromisoformat(claims[0]["claim_date"])
+            last_claim_days = (_d.today() - last_date).days
+        except Exception:
+            pass
 
-    # ── Rule-based renewal logic ─────────────────────────────────────────
-    base = prev_premium
-    risk_factors = []
-
-    if number_of_claims == 0:
-        ncb_diff = req.new_ncb - prev_ncb
-        if ncb_diff > 0:
-            base = int(base * (1 - ncb_diff / 100))
-            risk_factors.append(f"NCB increased {prev_ncb:.0f}% → {req.new_ncb:.0f}% (−{ncb_diff:.0f}%)")
-    elif number_of_claims == 1:
-        loading = 1.35 if highest_claim > 1_000_000 else 1.15
-        base = int(base * loading)
-        risk_factors.append(f"1 claim loading: +{int((loading-1)*100)}%")
-    elif number_of_claims == 2:
-        base = int(base * 1.50)
-        risk_factors.append("2 claims: +50% loading")
-    else:
-        base = int(base * 1.80)
-        risk_factors.append(f"{number_of_claims} claims: +80% loading")
-
-    # SI vs Market Value alignment
+    is_blacklisted = bl_status["blacklisted"]
     si_ratio = req.proposed_sum_insured / max(1, cmv)
+
+    # ── Try ML renewal model first (HistGBR trained on renewal data) ─────
+    engine_inst = get_engine()
+    renewal_input = {
+        "previous_premium":             prev_premium,
+        "previous_ncb":                 prev_ncb,
+        "new_ncb":                      req.new_ncb,
+        "number_of_claims":             number_of_claims,
+        "total_claim_amount":           total_claim_amount,
+        "highest_claim":                highest_claim,
+        "days_since_last_claim":        last_claim_days,
+        "vehicle_age":                  policy.get("vehicle_age", 5),
+        "driver_age":                   policy.get("driver_age", 35),
+        "years_with_company":           years_co,
+        "si_mv_ratio":                  si_ratio,
+    }
+    ml_premium = engine_inst.calculate_renewal_premium(renewal_input)
+    risk_factors = []
+    premium_source = "ML model"
+
+    if ml_premium is not None:
+        # ML model returned a prediction — use it, then apply mandatory overrides
+        base = int(ml_premium)
+        risk_factors.append(f"ML renewal model prediction: Rs.{base:,.0f}")
+        premium_source = "ML renewal model (HistGBM R²={:.3f})".format(
+            engine_inst.metadata.get("renewal_model", {}).get("r2_score", 0.0)
+        )
+    else:
+        # ── Rule-based fallback ──────────────────────────────────────────
+        base = prev_premium
+        premium_source = "Rule-based fallback"
+        if number_of_claims == 0:
+            ncb_diff = req.new_ncb - prev_ncb
+            if ncb_diff > 0:
+                base = int(base * (1 - ncb_diff / 100))
+                risk_factors.append(f"NCB {prev_ncb:.0f}% → {req.new_ncb:.0f}% (−{ncb_diff:.0f}%)")
+        elif number_of_claims == 1:
+            loading = 1.35 if highest_claim > 1_000_000 else 1.15
+            base = int(base * loading)
+            risk_factors.append(f"1 claim: +{int((loading-1)*100)}% loading")
+        elif number_of_claims == 2:
+            base = int(base * 1.50)
+            risk_factors.append("2 claims: +50% loading")
+        else:
+            base = int(base * 1.80)
+            risk_factors.append(f"{number_of_claims} claims: +80% loading")
+
+    # ── Mandatory adjustments applied on top of both ML and rule-based ──
+    if is_blacklisted:
+        surcharge = engine_inst.actuarial.get("blacklist_surcharge", 0.50)
+        base = int(base * (1 + surcharge))
+        risk_factors.append(f"Blacklist surcharge +{int(surcharge*100)}%: {bl_status.get('reason','')}")
+
     if si_ratio > 1.10:
         base = int(base * 1.08)
         risk_factors.append("Over-insured (SI > MV×1.1): +8%")
@@ -167,17 +208,12 @@ async def calculate_renewal(req: RenewalCalcRequest):
         base = int(base * 0.95)
         risk_factors.append("Under-insured adjustment: −5%")
 
-    # Loyalty discount
     if years_co >= 5 and number_of_claims == 0:
         base = int(base * 0.97)
-        risk_factors.append(f"Loyalty discount ({years_co} years): −3%")
+        risk_factors.append(f"Loyalty discount ({years_co} yrs clean): −3%")
 
-    # Blacklist surcharge (from DB — not user input)
-    is_blacklisted = bl_status["blacklisted"]
-    if is_blacklisted:
-        base = int(base * 1.50)
-        risk_factors.append(f"Blacklist surcharge +50%: {bl_status.get('reason','')}")
-
+    risk_factors.append(f"Source: {premium_source}")
+    base = max(engine_inst.MIN_PREMIUM, base)
     pct_change = (base - prev_premium) / max(1, prev_premium) * 100
 
     if pct_change < -20 or number_of_claims >= 3 or pct_change > 50:

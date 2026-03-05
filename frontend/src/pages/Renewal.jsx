@@ -76,39 +76,51 @@ function ShapPanel({ explanation }) {
   );
 }
 
-// ── Policy Search Dropdown ────────────────────────────────────────────────────
+// ── Policy Search Dropdown (server-side search) ─────────────────────────────
 function PolicyDropdown({ onSelect }) {
-  const [query, setQuery]       = useState("");
-  const [policies, setPolicies] = useState([]);
-  const [filtered, setFiltered] = useState([]);
-  const [open, setOpen]         = useState(false);
-  const [loading, setLoading]   = useState(true);
-  const ref = useRef(null);
+  const [query,   setQuery]   = useState("");
+  const [results, setResults] = useState([]);
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [total,   setTotal]   = useState(0);
+  const ref     = useRef(null);
+  const timerRef = useRef(null);
 
+  // Load initial 20 most recent on mount
   useEffect(() => {
-    insuranceAPI.getPoliciesList()
+    setLoading(true);
+    insuranceAPI.getPoliciesList("", 20)
       .then(r => {
         const list = r?.data?.policies || [];
-        setPolicies(list);
-        setFiltered(list.slice(0, 10));
+        setResults(list);
+        setTotal(r?.data?.total || list.length);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) { setFiltered(policies.slice(0, 10)); return; }
-    setFiltered(
-      policies
-        .filter(p =>
-          p.policy_id.toLowerCase().includes(q) ||
-          (p.customer_name || "").toLowerCase().includes(q) ||
-          (p.vehicle_model || "").toLowerCase().includes(q)
-        )
-        .slice(0, 15)
-    );
-  }, [query, policies]);
+  // Debounced server-side search
+  const handleInput = (val) => {
+    setQuery(val);
+    setOpen(true);
+    clearTimeout(timerRef.current);
+    if (!val.trim()) {
+      // Reset to initial 20
+      setLoading(true);
+      insuranceAPI.getPoliciesList("", 20)
+        .then(r => { setResults(r?.data?.policies || []); setTotal(r?.data?.total || 0); })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      setLoading(true);
+      insuranceAPI.getPoliciesList(val.trim(), 30)
+        .then(r => { setResults(r?.data?.policies || []); setTotal(r?.data?.total || 0); })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }, 280);  // 280ms debounce
+  };
 
   useEffect(() => {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -117,47 +129,81 @@ function PolicyDropdown({ onSelect }) {
   }, []);
 
   const select = (p) => {
-    setQuery(`${p.policy_id} — ${p.customer_name} (${p.vehicle_model})`);
+    setQuery(`${p.policy_id}  •  ${p.customer_name}  •  ${p.vehicle_model}`);
     setOpen(false);
     onSelect(p.policy_id);
   };
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <input
-        value={query}
-        onChange={e => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        placeholder={loading ? "Loading policies from DB…" : "Search by Policy ID, customer name, or vehicle…"}
-        style={{ width: "100%", padding: "11px 14px", borderRadius: 8,
-          border: "1px solid #e2e8f0", fontSize: 14, boxSizing: "border-box",
-          background: loading ? "#f8fafc" : "#fff" }}
-        disabled={loading}
-      />
-      {open && filtered.length > 0 && (
+      <div style={{ position: "relative" }}>
+        <input
+          value={query}
+          onChange={e => handleInput(e.target.value)}
+          onFocus={() => setOpen(true)}
+          placeholder="Search by Policy ID, customer name, or vehicle model…"
+          style={{ width: "100%", padding: "11px 40px 11px 14px", borderRadius: 8,
+            border: "1px solid #cbd5e1", fontSize: 14, boxSizing: "border-box",
+            outline: "none", transition: "border-color .15s" }}
+          onFocus_={() => {}}
+        />
+        {loading && (
+          <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+            width: 16, height: 16, border: "2px solid #e2e8f0", borderTopColor: "#2563eb",
+            borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+        )}
+        {!loading && query && (
+          <span onClick={() => { setQuery(""); handleInput(""); }}
+            style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+              cursor: "pointer", color: "#94a3b8", fontSize: 16, lineHeight: 1 }}>✕</span>
+        )}
+      </div>
+      {open && results.length > 0 && (
         <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
-          background: "#fff", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,.12)",
-          border: "1px solid #e2e8f0", zIndex: 100, maxHeight: 320, overflowY: "auto" }}>
-          {filtered.map((p, i) => (
+          background: "#fff", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,.14)",
+          border: "1px solid #e2e8f0", zIndex: 200, maxHeight: 340, overflowY: "auto" }}>
+          {results.map((p, i) => (
             <div key={i} onClick={() => select(p)}
-              style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #f8fafc",
-                display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              style={{ padding: "10px 14px", cursor: "pointer",
+                borderBottom: i < results.length - 1 ? "1px solid #f8fafc" : "none",
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                transition: "background .1s" }}
               onMouseEnter={e => e.currentTarget.style.background = "#f0f7ff"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{p.policy_id}</div>
-                <div style={{ fontSize: 11, color: "#64748b" }}>{p.customer_name} · {p.vehicle_model}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", fontFamily: "monospace" }}>
+                  {p.policy_id}
+                </div>
+                <div style={{ fontSize: 12, color: "#334155", marginTop: 1 }}>{p.customer_name}</div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{p.vehicle_model} · Age {p.driver_age}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "#64748b" }}>{p.province}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 3 }}>{p.province}</div>
+                {p.ncb_pct > 0 && (
+                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, fontWeight: 600,
+                    background: "#f0fdf4", color: "#166534", display: "block", marginBottom: 2 }}>
+                    NCB {p.ncb_pct}%
+                  </span>
+                )}
                 <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, fontWeight: 600,
-                  background: "#dcfce7", color: "#166534" }}>{p.status}</span>
+                  background: "#eff6ff", color: "#1d4ed8" }}>Active</span>
               </div>
             </div>
           ))}
-          <div style={{ padding: "8px 14px", fontSize: 11, color: "#94a3b8", textAlign: "center" }}>
-            Showing {filtered.length} of {policies.length} active policies
+          <div style={{ padding: "7px 14px", fontSize: 11, color: "#94a3b8",
+            textAlign: "center", background: "#f8fafc", borderTop: "1px solid #f1f5f9" }}>
+            {query.trim()
+              ? `${results.length} results for "${query.trim()}" — type more to narrow`
+              : `Recent ${results.length} policies · 48,244 total in database`}
           </div>
+        </div>
+      )}
+      {open && results.length === 0 && query.trim() && !loading && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+          background: "#fff", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,.1)",
+          border: "1px solid #e2e8f0", zIndex: 200, padding: "16px", textAlign: "center",
+          fontSize: 13, color: "#64748b" }}>
+          No policies found for <strong>"{query}"</strong>
         </div>
       )}
     </div>

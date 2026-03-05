@@ -469,18 +469,35 @@ async def issue_policy(req: dict):
 
 
 @router.get("/policies/list")
-async def list_policies_for_dropdown():
-    """Return policy IDs + customer names for renewal dropdown search."""
+async def list_policies_for_dropdown(q: str = "", limit: int = 20):
+    """
+    Return policy IDs + customer names for renewal dropdown search.
+    Supports server-side search via ?q= query param.
+    Default: most recent 20 policies. With query: searches all 48k records.
+    """
     try:
         from backend.utils.database import get_connection
         with get_connection() as conn:
-            rows = conn.execute("""
-                SELECT policy_id, customer_name, vehicle_model, driver_age, province, status
-                FROM policies
-                WHERE status = 'Active'
-                ORDER BY policy_id DESC
-                LIMIT 500
-            """).fetchall()
+            if q.strip():
+                # Server-side search across policy_id, customer_name, vehicle_model
+                search = f"%{q.strip().lower()}%"
+                rows = conn.execute("""
+                    SELECT policy_id, customer_name, vehicle_model, driver_age, province, status, ncb_pct
+                    FROM policies
+                    WHERE LOWER(policy_id) LIKE ?
+                       OR LOWER(customer_name) LIKE ?
+                       OR LOWER(vehicle_model) LIKE ?
+                    ORDER BY policy_id ASC
+                    LIMIT ?
+                """, (search, search, search, min(limit, 50))).fetchall()
+            else:
+                # No query — return most recent policies
+                rows = conn.execute("""
+                    SELECT policy_id, customer_name, vehicle_model, driver_age, province, status, ncb_pct
+                    FROM policies
+                    ORDER BY policy_id DESC
+                    LIMIT ?
+                """, (limit,)).fetchall()
         return {
             "policies": [
                 {
@@ -490,9 +507,11 @@ async def list_policies_for_dropdown():
                     "driver_age":    r[3],
                     "province":      r[4] or "",
                     "status":        r[5] or "Active",
+                    "ncb_pct":       r[6] or 0,
                 }
                 for r in rows
-            ]
+            ],
+            "total": conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0] if not q.strip() else len(rows)
         }
     except Exception as e:
         return {"policies": [], "error": str(e)}
