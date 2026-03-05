@@ -466,3 +466,33 @@ async def issue_policy(req: dict):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to issue policy: {str(e)}")
+
+
+@router.get("/policies/list")
+async def list_policies_for_dropdown():
+    """Return policy IDs + customer names for renewal dropdown search."""
+    try:
+        from backend.utils.database import get_connection
+        with get_connection() as conn:
+            rows = conn.execute("""
+                SELECT policy_id, customer_name, vehicle_model, driver_age, province, status
+                FROM policies
+                WHERE status = 'Active'
+                ORDER BY policy_id DESC
+                LIMIT 500
+            """).fetchall()
+        return {
+            "policies": [
+                {
+                    "policy_id":     r[0],
+                    "customer_name": r[1] or "",
+                    "vehicle_model": r[2] or "",
+                    "driver_age":    r[3],
+                    "province":      r[4] or "",
+                    "status":        r[5] or "Active",
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        return {"policies": [], "error": str(e)}

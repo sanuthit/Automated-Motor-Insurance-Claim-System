@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import insuranceAPI from "../services/api";
 
 const safe = (e) => {
-  if (!e) return "Unknown error — check backend is running on port 8000";
+  if (!e) return "Unknown error — check backend is running";
   const d = e?.response?.data;
   if (d?.detail) return typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail);
   if (typeof e?.message === "string") return e.message;
@@ -12,17 +12,11 @@ const safe = (e) => {
 const fmt = (n) =>
   `Rs. ${Number(n || 0).toLocaleString("en-LK", { maximumFractionDigits: 0 })}`;
 
+// ── Risk Gauge ────────────────────────────────────────────────────────────────
 function RiskGauge({ score }) {
   if (score == null) return null;
   const level = score < 25 ? "Low" : score < 50 ? "Moderate" : score < 70 ? "High" : "Very High";
   const color = score < 25 ? "#16a34a" : score < 50 ? "#f59e0b" : score < 70 ? "#ea580c" : "#dc2626";
-  const approvedClaims = claims.filter(c =>
-    (c.claim_status || "").toLowerCase().includes("approv") ||
-    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
-  );
-  const totalApproved = approvedClaims.reduce((s, c) => s + Number(c.approved_amount_lkr || c.approved_amount || c.claim_amount || 0), 0);
-  const approvedCount = approvedClaims.length;
-
   return (
     <div style={{ textAlign: "center", padding: 16 }}>
       <svg width={140} height={140} viewBox="0 0 140 140">
@@ -37,26 +31,33 @@ function RiskGauge({ score }) {
   );
 }
 
+// ── SHAP Explanation Panel ────────────────────────────────────────────────────
 function ShapPanel({ explanation }) {
   if (!explanation?.available || !explanation?.top_drivers?.length) return null;
   return (
-    <div style={{ padding: "14px 16px" }}>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Why this risk score?</div>
+    <div style={{ padding: "12px 16px", borderTop: "1px solid #f1f5f9" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        🧠 Why this risk score?
+        {explanation.is_ml_shap === false && (
+          <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e",
+            padding: "2px 6px", borderRadius: 10, fontWeight: 600 }}>Rule-based</span>
+        )}
+      </div>
       {explanation.top_drivers.map((d, i) => {
         const isRisk = d.direction === "increases_risk";
-        const barW = d.magnitude === "high" ? 70 : d.magnitude === "medium" ? 44 : 20;
+        const barW = d.magnitude === "high" ? 75 : d.magnitude === "medium" ? 48 : 22;
         return (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-            <span style={{ color: isRisk ? "#dc2626" : "#16a34a", fontWeight: 700, width: 14 }}>
-              {isRisk ? "+" : "-"}
+            <span style={{ color: isRisk ? "#dc2626" : "#16a34a", fontWeight: 700, width: 14, fontSize: 13 }}>
+              {isRisk ? "▲" : "▼"}
             </span>
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                <span style={{ fontSize: 12, fontWeight: 500 }}>
-                  {String(d.feature || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+                  {String(d.feature || "").replace(/_/g, " ")}
                 </span>
-                <span style={{ fontSize: 11, color: isRisk ? "#dc2626" : "#16a34a" }}>
-                  {d.reason || (isRisk ? "Increases risk" : "Reduces risk")}
+                <span style={{ fontSize: 10, color: "#64748b", textAlign: "right", maxWidth: 160 }}>
+                  {d.reason}
                 </span>
               </div>
               <div style={{ height: 5, background: "#f1f5f9", borderRadius: 3 }}>
@@ -75,8 +76,96 @@ function ShapPanel({ explanation }) {
   );
 }
 
+// ── Policy Search Dropdown ────────────────────────────────────────────────────
+function PolicyDropdown({ onSelect }) {
+  const [query, setQuery]       = useState("");
+  const [policies, setPolicies] = useState([]);
+  const [filtered, setFiltered] = useState([]);
+  const [open, setOpen]         = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    insuranceAPI.getPoliciesList()
+      .then(r => {
+        const list = r?.data?.policies || [];
+        setPolicies(list);
+        setFiltered(list.slice(0, 10));
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) { setFiltered(policies.slice(0, 10)); return; }
+    setFiltered(
+      policies
+        .filter(p =>
+          p.policy_id.toLowerCase().includes(q) ||
+          (p.customer_name || "").toLowerCase().includes(q) ||
+          (p.vehicle_model || "").toLowerCase().includes(q)
+        )
+        .slice(0, 15)
+    );
+  }, [query, policies]);
+
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const select = (p) => {
+    setQuery(`${p.policy_id} — ${p.customer_name} (${p.vehicle_model})`);
+    setOpen(false);
+    onSelect(p.policy_id);
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder={loading ? "Loading policies from DB…" : "Search by Policy ID, customer name, or vehicle…"}
+        style={{ width: "100%", padding: "11px 14px", borderRadius: 8,
+          border: "1px solid #e2e8f0", fontSize: 14, boxSizing: "border-box",
+          background: loading ? "#f8fafc" : "#fff" }}
+        disabled={loading}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+          background: "#fff", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,.12)",
+          border: "1px solid #e2e8f0", zIndex: 100, maxHeight: 320, overflowY: "auto" }}>
+          {filtered.map((p, i) => (
+            <div key={i} onClick={() => select(p)}
+              style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #f8fafc",
+                display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              onMouseEnter={e => e.currentTarget.style.background = "#f0f7ff"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{p.policy_id}</div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{p.customer_name} · {p.vehicle_model}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{p.province}</div>
+                <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 8, fontWeight: 600,
+                  background: "#dcfce7", color: "#166534" }}>{p.status}</span>
+              </div>
+            </div>
+          ))}
+          <div style={{ padding: "8px 14px", fontSize: 11, color: "#94a3b8", textAlign: "center" }}>
+            Showing {filtered.length} of {policies.length} active policies
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main Renewal Page ─────────────────────────────────────────────────────────
 export default function Renewal() {
-  const [searchId, setSearchId]         = useState("");
   const [fetchLoading, setFetchLoading] = useState(false);
   const [fetchErr, setFetchErr]         = useState("");
   const [policy, setPolicy]             = useState(null);
@@ -90,15 +179,16 @@ export default function Renewal() {
   const [renewLoading, setRenewLoading] = useState(false);
   const [renewErr, setRenewErr]         = useState("");
   const [renewed, setRenewed]           = useState(null);
+  const [selectedId, setSelectedId]     = useState("");
 
-  const fetchPolicy = async () => {
-    if (!searchId.trim()) { setFetchErr("Please enter a Policy ID"); return; }
-    setFetchLoading(true); setFetchErr(""); setPolicy(null); setResult(null);
+  const fetchPolicy = async (policyId) => {
+    const id = (policyId || selectedId || "").trim().toUpperCase();
+    if (!id) { setFetchErr("Please select a policy"); return; }
+    setFetchLoading(true); setFetchErr(""); setPolicy(null); setResult(null); setRenewed(null);
     try {
-      const res = await insuranceAPI.getRenewalPolicy(searchId.trim().toUpperCase());
+      const res = await insuranceAPI.getRenewalPolicy(id);
       const d = res.data;
 
-      // Normalise: API may return nested {policy:{}, vehicle:{}, ...} or flat
       let flat = {};
       if (d.policy && typeof d.policy === "object") {
         flat = {
@@ -106,21 +196,19 @@ export default function Renewal() {
           ...(d.vehicle || {}),
           ...(d.current_policy || {}),
           ...(d.suggested_renewal || {}),
-          // Map to display keys
-          current_market_value_lkr:  d.vehicle?.market_value,
-          previous_premium_lkr:      d.suggested_renewal?.previous_premium || d.current_policy?.calculated_premium,
-          previous_ncb_percentage:   d.suggested_renewal?.previous_ncb ?? d.current_policy?.ncb_pct,
-          suggested_new_ncb:         d.suggested_renewal?.new_ncb,
-          vehicle_current_age:       d.vehicle?.vehicle_age,
+          current_market_value_lkr:    d.vehicle?.market_value,
+          previous_premium_lkr:        d.suggested_renewal?.previous_premium || d.current_policy?.calculated_premium,
+          previous_ncb_percentage:     d.suggested_renewal?.previous_ncb ?? d.current_policy?.ncb_pct,
+          suggested_new_ncb:           d.suggested_renewal?.new_ncb,
+          vehicle_current_age:         d.vehicle?.vehicle_age,
           years_of_driving_experience: d.policy?.years_exp,
-          years_with_company:        d.suggested_renewal?.years_with_company,
-          claims:                    d.claim_history?.claims || [],
-          total_claims:              d.claim_history?.total_claims || 0,
-          blacklisted:               d.blacklist?.blacklisted || false,
+          years_with_company:          d.suggested_renewal?.years_with_company,
+          claims:                      d.claim_history?.claims || [],
+          total_claims:                d.claim_history?.total_claims || 0,
+          blacklisted:                 d.blacklist?.blacklisted || false,
         };
       } else {
-        flat = { ...d };
-        flat.claims = d.claims || [];
+        flat = { ...d, claims: d.claims || [] };
       }
 
       setPolicy(flat);
@@ -136,6 +224,11 @@ export default function Renewal() {
     }
   };
 
+  const handleDropdownSelect = (policyId) => {
+    setSelectedId(policyId);
+    fetchPolicy(policyId);
+  };
+
   const calculate = async () => {
     const e = {};
     const si = Number(newSI);
@@ -147,11 +240,11 @@ export default function Renewal() {
     setCalcLoading(true); setCalcErr(""); setResult(null);
     try {
       const res = await insuranceAPI.calculateRenewal({
-        policy_id:             policy.policy_id || policy.original_policy_id || searchId.trim().toUpperCase(),
-        proposed_sum_insured:  si,
-        new_ncb:               Number(newNCB),
-        current_market_value:  mv || undefined,
-        years_with_company:    policy.years_with_company || undefined,
+        policy_id:            policy.policy_id || selectedId,
+        proposed_sum_insured: si,
+        new_ncb:              Number(newNCB),
+        current_market_value: mv || undefined,
+        years_with_company:   policy.years_with_company || undefined,
       });
       setResult(res.data);
     } catch (e) {
@@ -166,7 +259,7 @@ export default function Renewal() {
     setRenewLoading(true); setRenewErr(""); setRenewed(null);
     try {
       const res = await insuranceAPI.processRenewal({
-        policy_id:            policy.policy_id || searchId.trim().toUpperCase(),
+        policy_id:            policy.policy_id || selectedId,
         renewal_premium:      result.renewal_premium || result.gross_premium,
         new_ncb:              Number(result.new_ncb ?? newNCB),
         proposed_sum_insured: Number(newSI),
@@ -178,69 +271,82 @@ export default function Renewal() {
       setRenewLoading(false);
     }
   };
+
+  const approvedClaims = claims.filter(c =>
+    (c.claim_status || "").toLowerCase().includes("approv") ||
+    Number(c.approved_amount_lkr || c.approved_amount || 0) > 0
+  );
+  const approvedCount = approvedClaims.length;
+
   return (
     <div style={{ padding: 24, fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh" }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, color: "#0f172a", margin: "0 0 4px" }}>Policy Renewal</h1>
+      <h1 style={{ fontSize: 24, fontWeight: 700, color: "#0f172a", margin: "0 0 4px" }}>
+        🔄 Policy Renewal
+      </h1>
       <p style={{ color: "#64748b", marginTop: 0, marginBottom: 24 }}>
-        Search by Policy ID — details loaded from the database automatically
+        Search for a policy — customer details auto-loaded from the database
       </p>
 
-      {/* Search */}
-      <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
-        <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 8 }}>Policy ID</label>
-        <div style={{ display: "flex", gap: 10 }}>
-          <input value={searchId} onChange={e => { setSearchId(e.target.value); setFetchErr(""); }}
-            onKeyDown={e => e.key === "Enter" && fetchPolicy()}
-            placeholder="e.g. NP00045355"
-            style={{ flex: 1, padding: "10px 14px", borderRadius: 8,
-              border: `1px solid ${fetchErr ? "#dc2626" : "#e2e8f0"}`, fontSize: 14 }} />
-          <button onClick={fetchPolicy} disabled={fetchLoading}
-            style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#2563eb",
-              color: "#fff", fontWeight: 600, cursor: fetchLoading ? "not-allowed" : "pointer",
-              opacity: fetchLoading ? 0.7 : 1 }}>
-            {fetchLoading ? "Searching..." : "Fetch Policy"}
-          </button>
-        </div>
-        {fetchErr && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 6 }}>&#9888; {fetchErr}</p>}
+      {/* Search Dropdown */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20,
+        boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
+        <label style={{ fontSize: 13, fontWeight: 700, color: "#334155", display: "block", marginBottom: 8 }}>
+          Search Policy
+        </label>
+        <PolicyDropdown onSelect={handleDropdownSelect} />
+        {fetchLoading && (
+          <div style={{ marginTop: 10, color: "#2563eb", fontSize: 13 }}>⏳ Loading policy details…</div>
+        )}
+        {fetchErr && (
+          <p style={{ color: "#dc2626", fontSize: 12, marginTop: 8 }}>⚠ {fetchErr}</p>
+        )}
       </div>
 
       {policy && (
         <>
-          {/* Customer + Vehicle grid */}
+          {/* Info Grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
             <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
-              <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700 }}>Customer & Policy</h3>
+              <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                👤 Customer & Policy
+              </h3>
               {[
-                ["Policy ID",          policy.policy_id || searchId],
+                ["Policy ID",          policy.policy_id || selectedId],
                 ["Customer",           policy.customer_name],
                 ["NIC",                policy.nic],
                 ["Province",           policy.province],
-                ["Years with Company", policy.years_with_company != null ? policy.years_with_company + " yrs" : "—"],
+                ["Years with Company", policy.years_with_company != null ? policy.years_with_company + " yrs" : "1 yr"],
                 ["Previous Premium",   fmt(policy.previous_premium_lkr || policy.calculated_premium || policy.previous_premium)],
                 ["Previous NCB",       (policy.previous_ncb_percentage ?? policy.ncb_pct ?? 0) + "%"],
               ].map(([k, v]) => (
-                <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #f8fafc", fontSize: 13 }}>
+                <div key={k} style={{ display: "flex", justifyContent: "space-between",
+                  padding: "5px 0", borderBottom: "1px solid #f8fafc", fontSize: 13 }}>
                   <span style={{ color: "#64748b" }}>{k}</span>
                   <span style={{ fontWeight: 600, color: "#0f172a" }}>{v || "—"}</span>
                 </div>
               ))}
             </div>
+
             <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
-              <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700 }}>Vehicle Details</h3>
+              <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                🚗 Vehicle Details
+              </h3>
               {[
-                ["Model",         policy.vehicle_model],
-                ["Year",          policy.vehicle_year],
-                ["Engine CC",     policy.engine_cc != null ? policy.engine_cc + " cc" : "—"],
-                ["Type",          policy.vehicle_type],
-                ["Condition",     policy.vehicle_condition],
-                ["Vehicle Age",   (policy.vehicle_current_age ?? policy.vehicle_age) != null ? (policy.vehicle_current_age ?? policy.vehicle_age) + " yrs" : "—"],
-                ["Market Value",  fmt(policy.current_market_value_lkr || policy.market_value)],
-                ["Previous SI",   fmt(policy.sum_insured || policy.previous_sum_insured_lkr)],
-                ["Driver Age",    policy.driver_age != null ? policy.driver_age + " yrs" : "—"],
-                ["Experience",    (policy.years_of_driving_experience ?? policy.years_exp) != null
+                ["Model",       policy.vehicle_model],
+                ["Year",        policy.vehicle_year],
+                ["Engine CC",   policy.engine_cc != null ? policy.engine_cc + " cc" : "—"],
+                ["Type",        policy.vehicle_type],
+                ["Condition",   policy.vehicle_condition],
+                ["Vehicle Age", (policy.vehicle_current_age ?? policy.vehicle_age) != null
+                  ? (policy.vehicle_current_age ?? policy.vehicle_age) + " yrs" : "—"],
+                ["Market Value", fmt(policy.current_market_value_lkr || policy.market_value)],
+                ["Previous SI",  fmt(policy.sum_insured || policy.previous_sum_insured_lkr)],
+                ["Driver Age",   policy.driver_age != null ? policy.driver_age + " yrs" : "—"],
+                ["Experience",   (policy.years_of_driving_experience ?? policy.years_exp) != null
                   ? (policy.years_of_driving_experience ?? policy.years_exp) + " yrs" : "—"],
               ].map(([k, v]) => (
-                <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #f8fafc", fontSize: 13 }}>
+                <div key={k} style={{ display: "flex", justifyContent: "space-between",
+                  padding: "5px 0", borderBottom: "1px solid #f8fafc", fontSize: 13 }}>
                   <span style={{ color: "#64748b" }}>{k}</span>
                   <span style={{ fontWeight: 600, color: "#0f172a" }}>{v || "—"}</span>
                 </div>
@@ -248,36 +354,32 @@ export default function Renewal() {
             </div>
           </div>
 
-          {/* Claims */}
+          {/* Claims History */}
           {claims.length > 0 ? (
-            <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 12, padding: 20,
+              boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Claims History ({claims.length})</h3>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <span style={{ fontSize: 12, padding: "3px 10px", background: "#fef2f2", color: "#dc2626", borderRadius: 20, fontWeight: 600 }}>
-                    {approvedCount} Approved
-                  </span>
-                  <span style={{ fontSize: 12, padding: "3px 10px", background: "#fef2f2", color: "#dc2626", borderRadius: 20, fontWeight: 600 }}>
-                    Total: {fmt(totalApproved)}
-                  </span>
-                </div>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>📋 Claims History ({claims.length})</h3>
+                <span style={{ fontSize: 12, padding: "3px 10px", background: "#fef2f2",
+                  color: "#dc2626", borderRadius: 20, fontWeight: 600 }}>
+                  {approvedCount} Approved
+                </span>
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Claim ID","Type","Date","Claimed","Approved","Status"].map(h => (
+                    {["Claim ID", "Type", "Date", "Claimed", "Status"].map(h => (
                       <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, color: "#475569" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {claims.slice(0, 6).map((c, i) => (
+                  {claims.slice(0, 5).map((c, i) => (
                     <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "7px 10px" }}>{c.claim_id || "CLM-" + (i + 1)}</td>
                       <td style={{ padding: "7px 10px" }}>{c.claim_type || "—"}</td>
                       <td style={{ padding: "7px 10px" }}>{c.claim_date || "—"}</td>
                       <td style={{ padding: "7px 10px" }}>{fmt(c.claim_amount_lkr || c.claim_amount)}</td>
-                      <td style={{ padding: "7px 10px", fontWeight: 600 }}>{fmt(c.approved_amount_lkr || c.approved_amount)}</td>
                       <td style={{ padding: "7px 10px" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
                           background: (c.claim_status || "").toLowerCase().includes("approv") ? "#dcfce7" : "#fef9c3",
@@ -293,13 +395,14 @@ export default function Renewal() {
           ) : (
             <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10,
               padding: "12px 16px", marginBottom: 20, color: "#166534", fontSize: 13 }}>
-              No claims recorded — eligible for maximum NCB discount
+              ✅ No claims recorded — eligible for maximum NCB discount
             </div>
           )}
 
-          {/* Renewal params */}
-          <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700 }}>Renewal Parameters</h3>
+          {/* Renewal Parameters */}
+          <div style={{ background: "#fff", borderRadius: 12, padding: 20,
+            boxShadow: "0 1px 4px rgba(0,0,0,.06)", marginBottom: 20 }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700 }}>📝 Renewal Parameters</h3>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
@@ -307,9 +410,9 @@ export default function Renewal() {
                 </label>
                 <input type="number" value={newSI}
                   onChange={e => { setNewSI(e.target.value); setErrs(p => ({ ...p, newSI: "" })); }}
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8,
-                    border: `1px solid ${errs.newSI ? "#dc2626" : "#e2e8f0"}`, fontSize: 14, boxSizing: "border-box" }} />
-                {errs.newSI && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>&#9888; {errs.newSI}</p>}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, boxSizing: "border-box",
+                    border: `1px solid ${errs.newSI ? "#dc2626" : "#e2e8f0"}`, fontSize: 14 }} />
+                {errs.newSI && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>⚠ {errs.newSI}</p>}
                 {(policy.current_market_value_lkr || policy.market_value) > 0 && (
                   <p style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
                     Market value: {fmt(policy.current_market_value_lkr || policy.market_value)}
@@ -328,34 +431,36 @@ export default function Renewal() {
                 </select>
                 {approvedCount > 0 && (
                   <p style={{ fontSize: 11, color: "#ea580c", marginTop: 4 }}>
-                    &#9888; {approvedCount} claim(s) — NCB capped at 20%
+                    ⚠ {approvedCount} claim(s) — NCB capped at 20%
                   </p>
                 )}
               </div>
             </div>
             <div style={{ marginTop: 12, padding: "10px 14px", background: "#f8fafc", borderRadius: 8, fontSize: 12, color: "#64748b" }}>
-              <strong>Renewal period:</strong> Today to {new Date(Date.now() + 365 * 86400000).toLocaleDateString("en-LK")}
+              <strong>Renewal period:</strong> Today → {new Date(Date.now() + 365 * 86400000).toLocaleDateString("en-LK")}
               {" | "}
-              <strong>Loading:</strong> {approvedCount === 0 ? "None (no claims)" : approvedCount === 1 ? "15-35% surcharge" : "50-80% surcharge"}
+              <strong>Loading:</strong> {approvedCount === 0 ? "None (no claims)" : approvedCount === 1 ? "15–35% surcharge" : "50–80% surcharge"}
             </div>
             <button onClick={calculate} disabled={calcLoading}
               style={{ marginTop: 16, padding: "12px 28px", borderRadius: 8, border: "none",
                 background: calcLoading ? "#94a3b8" : "#2563eb", color: "#fff",
                 fontWeight: 700, fontSize: 15, cursor: calcLoading ? "not-allowed" : "pointer" }}>
-              {calcLoading ? "Calculating..." : "Calculate Renewal Premium"}
+              {calcLoading ? "Calculating…" : "Calculate Renewal Premium"}
             </button>
             {calcErr && (
               <div style={{ marginTop: 12, padding: "10px 14px", background: "#fef2f2",
                 border: "1px solid #fca5a5", borderRadius: 8, color: "#dc2626", fontSize: 13 }}>
-                &#9888; {calcErr}
+                ⚠ {calcErr}
               </div>
             )}
           </div>
 
-          {/* Result */}
+          {/* Results */}
           {result && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-              <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
+              {/* Premium card */}
+              <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden",
+                boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
                 <div style={{ background: "#2563eb", padding: "16px 20px", color: "#fff" }}>
                   <div style={{ fontSize: 13, opacity: 0.85 }}>Renewal Premium</div>
                   <div style={{ fontSize: 32, fontWeight: 700 }}>
@@ -373,12 +478,13 @@ export default function Renewal() {
                     ["New NCB",          (result.new_ncb ?? newNCB) + "%"],
                     ["Recommendation",   result.recommendation || "APPROVE"],
                   ].map(([k, v], i) => (
-                    <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0",
-                      borderBottom: i < 2 ? "1px solid #f1f5f9" : "none", fontSize: 13 }}>
+                    <div key={k} style={{ display: "flex", justifyContent: "space-between",
+                      padding: "7px 0", borderBottom: i < 2 ? "1px solid #f1f5f9" : "none", fontSize: 13 }}>
                       <span style={{ color: "#64748b" }}>{k}</span>
-                      <span style={{ fontWeight: 600, color: k === "Recommendation"
-                        ? (v === "APPROVE" ? "#16a34a" : v === "REJECT" ? "#dc2626" : "#f59e0b")
-                        : "#0f172a" }}>{v}</span>
+                      <span style={{ fontWeight: 600,
+                        color: k === "Recommendation"
+                          ? (v === "APPROVE" ? "#16a34a" : v === "REJECT" ? "#dc2626" : "#f59e0b")
+                          : "#0f172a" }}>{v}</span>
                     </div>
                   ))}
                   {result.risk_factors?.length > 0 && (
@@ -390,14 +496,14 @@ export default function Renewal() {
                     </div>
                   )}
 
-                  {/* Renew Policy button */}
+                  {/* Renew button */}
                   {!renewed ? (
                     <div style={{ marginTop: 16 }}>
                       <button onClick={renewPolicy} disabled={renewLoading}
                         style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none",
                           background: renewLoading ? "#94a3b8" : "#16a34a", color: "#fff",
                           fontWeight: 700, fontSize: 15, cursor: renewLoading ? "not-allowed" : "pointer" }}>
-                        {renewLoading ? "Processing..." : "✅ Renew Policy"}
+                        {renewLoading ? "Processing…" : "✅ Renew Policy"}
                       </button>
                       {renewErr && (
                         <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2",
@@ -407,12 +513,12 @@ export default function Renewal() {
                       )}
                     </div>
                   ) : (
-                    <div style={{ marginTop: 16, padding: "12px 16px", background: "#f0fdf4",
+                    <div style={{ marginTop: 16, padding: "14px 16px", background: "#f0fdf4",
                       border: "1px solid #86efac", borderRadius: 10 }}>
-                      <div style={{ fontWeight: 700, color: "#166534", marginBottom: 4 }}>
+                      <div style={{ fontWeight: 700, color: "#166534", fontSize: 14, marginBottom: 6 }}>
                         ✅ Policy Renewed Successfully!
                       </div>
-                      <div style={{ fontSize: 13, color: "#166534" }}>
+                      <div style={{ fontSize: 13, color: "#166534", lineHeight: 1.8 }}>
                         <strong>Renewal ID:</strong> {renewed.renewal_id}<br />
                         <strong>Valid:</strong> {renewed.start_date} → {renewed.end_date}
                       </div>
@@ -421,13 +527,20 @@ export default function Renewal() {
                 </div>
               </div>
 
-              {/* Risk Assessment — always shows with fallback */}
-              <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
-                <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9" }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>AI Risk Assessment</span>
-                  {result.explanation?.is_ml_shap === false && (
-                    <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 7px",
-                      borderRadius: 10, marginLeft: 8, fontWeight: 600 }}>Rule-based</span>
+              {/* Risk card */}
+              <div style={{ background: "#fff", borderRadius: 12, overflow: "hidden",
+                boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
+                <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9",
+                  display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>🤖 AI Risk Assessment</span>
+                  {result.risk_label && (
+                    <span style={{
+                      padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700,
+                      background: result.risk_label === "HIGH" ? "#fef2f2" : result.risk_label === "LOW" ? "#f0fdf4" : "#fffbeb",
+                      color: result.risk_label === "HIGH" ? "#dc2626" : result.risk_label === "LOW" ? "#16a34a" : "#d97706"
+                    }}>
+                      {result.risk_label} RISK
+                    </span>
                   )}
                 </div>
                 <RiskGauge score={result.risk_score} />

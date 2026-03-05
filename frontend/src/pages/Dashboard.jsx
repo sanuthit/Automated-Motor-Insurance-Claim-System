@@ -1,302 +1,452 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { FileText, TrendingUp, Shield, Brain, AlertTriangle, CheckCircle, Award, Filter } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import {
+  BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  LineChart, Line, RadarChart, Radar, PolarGrid,
+  PolarAngleAxis, PolarRadiusAxis
+} from 'recharts'
+import { FileText, TrendingUp, Shield, Brain, AlertTriangle, CheckCircle, Award, RefreshCw } from 'lucide-react'
 import insuranceAPI from '../services/api'
 
-const C = ['#0f4c81','#e8a020','#1a7a4a','#c0392b','#6c3483','#0e6655','#d68910','#2980b9']
-const VEHICLE_COLORS = { Car:'#0f4c81', SUV:'#e8a020', Van:'#1a7a4a', 'Dual Purpose':'#6c3483' }
+const PROV_COLORS = ['#0f4c81','#e8a020','#1a7a4a','#c0392b','#6c3483','#0e6655','#d68910','#2980b9','#7f8c8d']
+const VEH_COLORS  = { Car:'#0f4c81', SUV:'#e8a020', Van:'#1a7a4a', 'Dual Purpose':'#6c3483' }
+const RISK_COLORS = ['#1a7a4a','#e8a020','#c0392b']
 
+const fmt = (n) => `Rs. ${Number(n||0).toLocaleString('en-LK',{maximumFractionDigits:0})}`
+const fmtK = (n) => n >= 1000000 ? `Rs.${(n/1000000).toFixed(1)}M` : `Rs.${(n/1000).toFixed(0)}K`
+
+// ── Tooltip customiser ────────────────────────────────────────────────────────
+const RiskTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8,
+      padding:'10px 14px', boxShadow:'0 4px 12px rgba(0,0,0,.1)', fontSize:12 }}>
+      <div style={{ fontWeight:700, marginBottom:4 }}>{label}</div>
+      {payload.map((p,i) => (
+        <div key={i} style={{ color:p.color||'#334155' }}>
+          {p.name}: <strong>{typeof p.value === 'number' ? p.value.toFixed(1) : p.value}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Clickable KPI card ────────────────────────────────────────────────────────
+function KpiCard({ label, value, icon: Icon, color, bg, sub, onClick, active }) {
+  return (
+    <div onClick={onClick} className="kpi-card"
+      style={{ cursor: onClick ? 'pointer' : 'default',
+        outline: active ? `2px solid ${color}` : 'none',
+        transform: active ? 'translateY(-2px)' : 'none',
+        transition:'all .2s' }}>
+      <div className="kpi-icon" style={{ background: bg }}>
+        <Icon size={18} color={color} />
+      </div>
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value" style={{ color }}>{value}</div>
+      {sub && <div style={{ fontSize:10, color:'#94a3b8', marginTop:2 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// ── Province risk bar with inline mini-bar ────────────────────────────────────
+function ProvTable({ data, highlight, onRowClick }) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Province</th><th>Policies</th><th>Avg Risk Score</th><th>Claims</th><th>Risk Level</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((p,i) => (
+          <tr key={i} onClick={() => onRowClick(p.province)}
+            style={{ cursor:'pointer', background: highlight===p.province ? '#eff6ff' : 'transparent',
+              transition:'background .15s' }}>
+            <td style={{ fontWeight:500 }}>{p.province}</td>
+            <td>{(p.policy_count||0).toLocaleString()}</td>
+            <td>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ flex:1, background:'#f0f4f8', borderRadius:4, height:8 }}>
+                  <div style={{ width:`${Math.min(100,(p.avg_risk/80)*100)}%`, height:'100%', borderRadius:4,
+                    background: p.avg_risk>=70?'#c0392b':p.avg_risk>=40?'#e8a020':'#1a7a4a' }} />
+                </div>
+                <span style={{ fontWeight:600, fontSize:13 }}>{Number(p.avg_risk).toFixed(1)}</span>
+              </div>
+            </td>
+            <td>{(p.claim_count||0).toLocaleString()}</td>
+            <td>
+              <span className={`risk-badge ${p.avg_risk>=70?'risk-high':p.avg_risk>=40?'risk-medium':'risk-low'}`}>
+                {p.avg_risk>=70?'High':p.avg_risk>=40?'Medium':'Low'}
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [stats,       setStats]       = useState(null)
-  const [loading,     setLoading]     = useState(true)
-  const [lastUpdated, setLastUpdated] = useState(null)
-  // Filters
-  const [filterProvince, setFilterProvince] = useState('All')
-  const [filterVehicle,  setFilterVehicle]  = useState('All')
-  const [filterRisk,     setFilterRisk]     = useState('All')
+  const [stats,        setStats]        = useState(null)
+  const [loading,      setLoading]      = useState(true)
+  const [lastUpdated,  setLastUpdated]  = useState(null)
+  const [activeChart,  setActiveChart]  = useState('age')   // age | province | occupation | engine
+  const [highlightProv,setHighlightProv]= useState(null)
+  const [refreshing,   setRefreshing]   = useState(false)
+
+  const load = async (showSpinner = false) => {
+    if (showSpinner) setRefreshing(true)
+    try {
+      const r = await insuranceAPI.getDashboardStats()
+      setStats(r.data)
+      setLastUpdated(new Date())
+    } catch(e) { console.error(e) }
+    finally {
+      setLoading(false)
+      if (showSpinner) setRefreshing(false)
+    }
+  }
 
   useEffect(() => {
-    const load = () => {
-      insuranceAPI.getDashboardStats()
-        .then(r => {
-          setStats(r.data)
-          setLastUpdated(new Date())
-        })
-        .catch(console.error)
-        .finally(() => setLoading(false))
-    }
     load()
-    const interval = setInterval(load, 30000)
-    return () => clearInterval(interval)
+    const iv = setInterval(load, 60000)
+    return () => clearInterval(iv)
   }, [])
 
-  // All data comes from single /dashboard/stats endpoint
-  const ageRisk    = stats?.age_risk     || []
-  const provRisk   = stats?.province_risk || []
-  const claimTypes = stats?.claim_types  || []
-  const featImp    = stats?.feature_importance || []
-  const vehTypes   = stats?.vehicle_types || []
+  if (loading) return <div className="loading-overlay"><div className="spinner"/></div>
 
-  // Province filter applied to all charts
-  const filteredProv = useMemo(() => {
-    let data = [...provRisk]
-    if (filterProvince !== 'All') data = data.filter(p => p.province === filterProvince)
-    if (filterRisk === 'High')   data = data.filter(p => p.avg_risk >= 70)
-    if (filterRisk === 'Medium') data = data.filter(p => p.avg_risk >= 40 && p.avg_risk < 70)
-    if (filterRisk === 'Low')    data = data.filter(p => p.avg_risk < 40)
-    return data.sort((a,b) => b.avg_risk - a.avg_risk)
-  }, [provRisk, filterProvince, filterRisk])
-
-  // Vehicle filter applied to vehicle pie
-  const filteredVeh = useMemo(() => {
-    if (filterVehicle === 'All') return vehTypes
-    return vehTypes.filter(v => v.name === filterVehicle)
-  }, [vehTypes, filterVehicle])
-
-  // Age risk filtered by risk level
-  const filteredAgeRisk = useMemo(() => {
-    if (filterRisk === 'All') return ageRisk
-    if (filterRisk === 'High')   return ageRisk.filter(r => r.avg_risk >= 70)
-    if (filterRisk === 'Medium') return ageRisk.filter(r => r.avg_risk >= 40 && r.avg_risk < 70)
-    return ageRisk.filter(r => r.avg_risk < 40)
-  }, [ageRisk, filterRisk])
-
-  // Filtered KPIs from province data
-  const filteredKpis = useMemo(() => {
-    const activeProv = filterProvince === 'All' ? provRisk : provRisk.filter(p => p.province === filterProvince)
-    const totalPolicies = filterProvince === 'All' ? stats?.total_policies : activeProv.reduce((s,p) => s + (p.policy_count||0), 0)
-    const totalClaims   = activeProv.reduce((s,p) => s + (p.claim_count||0), 0)
-    return { totalPolicies, totalClaims }
-  }, [provRisk, filterProvince, stats])
-
-  const provinces  = ['All', ...provRisk.map(p => p.province)]
-  const vehicleOpts = ['All', ...vehTypes.map(v => v.name)]
-
-  if (loading) return <div className="loading-overlay"><div className="spinner" /></div>
-
-  const kpis = [
-    { label: 'Total Policies',   value: filteredKpis.totalPolicies?.toLocaleString() || '—',        icon: FileText,      color: '#0f4c81', bg: '#eff6ff' },
-    { label: 'Avg Premium (LKR)',value: stats?.avg_premium ? `Rs.${(stats.avg_premium/1000).toFixed(0)}K` : '—', icon: TrendingUp, color: '#1a7a4a', bg: '#f0fdf4' },
-    { label: 'Claim Approval',   value: stats?.claim_approval_rate != null ? `${stats.claim_approval_rate.toFixed(1)}%` : '—', icon: CheckCircle, color: '#1a7a4a', bg: '#f0fdf4' },
-    { label: 'Avg Claim (LKR)',  value: stats?.avg_claim_amount ? `Rs.${(stats.avg_claim_amount/1000).toFixed(0)}K` : '—', icon: Shield, color: '#e8a020', bg: '#fffbeb' },
-    { label: 'NCB Eligibility',  value: stats?.ncb_rate != null ? `${stats.ncb_rate.toFixed(1)}%` : '—', icon: Award, color: '#0f4c81', bg: '#eff6ff' },
-    { label: 'High Risk Rate',   value: stats?.accident_rate != null ? `${stats.accident_rate.toFixed(1)}%` : '—', icon: AlertTriangle, color: '#c0392b', bg: '#fef2f2' },
-    { label: 'Risk Model AUC',   value: stats?.model_auc != null ? `${Number(stats.model_auc).toFixed(4)}` : '—', icon: Brain, color: '#6c3483', bg: '#faf5ff' },
-    { label: 'Premium Model R²', value: stats?.model_r2 != null  ? `${Number(stats.model_r2).toFixed(4)}`  : '—', icon: Brain, color: '#0e6655', bg: '#f0fdfa' },
-  ]
+  const ageRisk    = stats?.age_risk          || []
+  const provRisk   = stats?.province_risk     || []
+  const claimTypes = stats?.claim_types       || []
+  const vehTypes   = stats?.vehicle_types     || []
+  const riskDist   = stats?.risk_distribution || []
+  const ncbDist    = stats?.ncb_distribution  || []
+  const occRisk    = stats?.occupation_risk   || []
+  const ccRisk     = stats?.engine_cc_risk    || []
+  const featImp    = stats?.feature_importance|| []
 
   const genderData = [
-    { name: 'Male',   value: stats?.gender_male   || 0 },
-    { name: 'Female', value: stats?.gender_female  || 0 },
+    { name:'Male',   value: stats?.gender_male   || 0 },
+    { name:'Female', value: stats?.gender_female  || 0 },
   ]
 
-  const selStyle = {
-    padding: '6px 10px', borderRadius: 6, border: '1px solid #e2e8f0',
-    fontSize: 12, background: '#fff', cursor: 'pointer'
+  // Province pie for drill-down
+  const provPie = provRisk.map((p,i) => ({ name: p.province, value: p.policy_count, fill: PROV_COLORS[i%PROV_COLORS.length] }))
+
+  const kpis = [
+    { label:'Total Policies',    value:(stats?.total_policies||0).toLocaleString(), icon:FileText,      color:'#0f4c81', bg:'#eff6ff',  sub:'All active records' },
+    { label:'Avg Premium',       value:fmtK(stats?.avg_premium||0),                 icon:TrendingUp,    color:'#1a7a4a', bg:'#f0fdf4',  sub:'Per policy/year' },
+    { label:'Claim Approval',    value:`${(stats?.claim_approval_rate||0).toFixed(1)}%`, icon:CheckCircle, color:'#1a7a4a', bg:'#f0fdf4', sub:`${(stats?.total_claims||0).toLocaleString()} total claims` },
+    { label:'Avg Claim Amount',  value:fmtK(stats?.avg_claim_amount||0),             icon:Shield,        color:'#e8a020', bg:'#fffbeb',  sub:'Per approved claim' },
+    { label:'NCB Eligible',      value:`${(stats?.ncb_rate||0).toFixed(1)}%`,         icon:Award,         color:'#0f4c81', bg:'#eff6ff',  sub:'No-claim bonus holders' },
+    { label:'High Risk Rate',    value:`${(stats?.accident_rate||0).toFixed(1)}%`,    icon:AlertTriangle, color:'#c0392b', bg:'#fef2f2',  sub:'Risk score ≥ 70' },
+    { label:'Risk Model AUC',    value:(stats?.model_auc||0).toFixed(3),              icon:Brain,         color:'#6c3483', bg:'#faf5ff',  sub:'Stacking Ensemble' },
+    { label:'Premium R²',        value:(stats?.model_r2||0).toFixed(3),               icon:Brain,         color:'#0e6655', bg:'#f0fdfa',  sub:'HistGBM no-leakage' },
+  ]
+
+  const CHART_TABS = [
+    { id:'age',       label:'👤 Age vs Risk' },
+    { id:'occupation',label:'💼 Occupation Risk' },
+    { id:'engine',    label:'⚙️ Engine CC Risk' },
+    { id:'ncb',       label:'🏆 NCB Distribution' },
+  ]
+
+  const renderMainChart = () => {
+    if (activeChart === 'age') return (
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={ageRisk} margin={{ bottom:20 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis dataKey="age_group" tick={{fontSize:12}}
+            label={{value:'Driver Age Group', position:'insideBottom', offset:-8, fontSize:11, fill:'#94a3b8'}} />
+          <YAxis domain={[0,100]} tick={{fontSize:11}}
+            label={{value:'Avg Risk Score', angle:-90, position:'insideLeft', fontSize:11, fill:'#94a3b8'}} />
+          <Tooltip content={<RiskTooltip/>} />
+          <Bar dataKey="avg_risk" name="Avg Risk Score" radius={[4,4,0,0]}>
+            {ageRisk.map((e,i) => (
+              <Cell key={i} fill={e.avg_risk>=70?'#c0392b':e.avg_risk>=50?'#e8a020':'#1a7a4a'} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    )
+    if (activeChart === 'occupation') return (
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={occRisk} layout="vertical" margin={{left:10}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" horizontal={false} />
+          <XAxis type="number" domain={[0,80]} tick={{fontSize:11}}
+            label={{value:'Avg Risk Score', position:'insideBottom', offset:-4, fontSize:10, fill:'#94a3b8'}} />
+          <YAxis dataKey="occupation" type="category" tick={{fontSize:10}} width={145} />
+          <Tooltip content={<RiskTooltip/>} />
+          <Bar dataKey="avg_risk" name="Avg Risk Score" radius={[0,4,4,0]}>
+            {occRisk.map((e,i) => (
+              <Cell key={i} fill={e.avg_risk>=60?'#c0392b':e.avg_risk>=45?'#e8a020':'#1a7a4a'} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    )
+    if (activeChart === 'engine') return (
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={ccRisk} margin={{bottom:20}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis dataKey="bucket" tick={{fontSize:11}}
+            label={{value:'Engine Displacement', position:'insideBottom', offset:-8, fontSize:10, fill:'#94a3b8'}} />
+          <YAxis yAxisId="left" domain={[0,100]} tick={{fontSize:11}}
+            label={{value:'Avg Risk Score', angle:-90, position:'insideLeft', fontSize:10, fill:'#94a3b8'}} />
+          <YAxis yAxisId="right" orientation="right" tick={{fontSize:11}}
+            label={{value:'Policy Count', angle:90, position:'insideRight', fontSize:10, fill:'#94a3b8'}} />
+          <Tooltip content={<RiskTooltip/>} />
+          <Bar yAxisId="left"  dataKey="avg_risk" name="Avg Risk Score" fill="#e8a020" radius={[4,4,0,0]} />
+          <Bar yAxisId="right" dataKey="count"    name="Policy Count"   fill="#0f4c81" radius={[4,4,0,0]} opacity={0.5} />
+          <Legend />
+        </BarChart>
+      </ResponsiveContainer>
+    )
+    if (activeChart === 'ncb') return (
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={ncbDist} margin={{bottom:20}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis dataKey="ncb" tick={{fontSize:11}}
+            label={{value:'NCB Discount (%)', position:'insideBottom', offset:-8, fontSize:11, fill:'#94a3b8'}} />
+          <YAxis tick={{fontSize:11}}
+            label={{value:'Policy Count', angle:-90, position:'insideLeft', fontSize:11, fill:'#94a3b8'}} />
+          <Tooltip content={<RiskTooltip/>} />
+          <Bar dataKey="count" name="Policies" radius={[4,4,0,0]}>
+            {ncbDist.map((e,i) => (
+              <Cell key={i} fill={e.ncb===0?'#c0392b':e.ncb>=30?'#1a7a4a':'#0f4c81'} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    )
   }
 
   return (
     <div>
-      <h1 className="section-title">📊 Analytics Dashboard</h1>
-      <p className="section-sub">
-        Live data from database —{' '}
-        {lastUpdated
-          ? <span style={{fontSize:11,color:'#1a7a4a'}}>✓ Updated: {lastUpdated.toLocaleTimeString()}</span>
-          : <span style={{color:'#888',fontSize:11}}>Loading…</span>}
-      </p>
-
-      {/* Filters */}
-      <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20,
-        background:'#fff', padding:'12px 16px', borderRadius:10, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
-        <Filter size={16} color="#64748b" />
-        <span style={{fontSize:13,fontWeight:600,color:'#475569'}}>Filters:</span>
-        <select value={filterProvince} onChange={e=>setFilterProvince(e.target.value)} style={selStyle}>
-          {provinces.map(p=><option key={p}>{p}</option>)}
-        </select>
-        <select value={filterVehicle} onChange={e=>setFilterVehicle(e.target.value)} style={selStyle}>
-          {vehicleOpts.map(v=><option key={v}>{v}</option>)}
-        </select>
-        <select value={filterRisk} onChange={e=>setFilterRisk(e.target.value)} style={selStyle}>
-          {['All','High','Medium','Low'].map(r=><option key={r}>{r} Risk</option>)}
-        </select>
-        {(filterProvince!=='All'||filterVehicle!=='All'||filterRisk!=='All') && (
-          <button onClick={()=>{setFilterProvince('All');setFilterVehicle('All');setFilterRisk('All')}}
-            style={{...selStyle, background:'#f1f5f9', color:'#64748b'}}>
-            Clear
-          </button>
-        )}
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:4 }}>
+        <div>
+          <h1 className="section-title">📊 Analytics Dashboard</h1>
+          <p className="section-sub" style={{ marginBottom:0 }}>
+            Live data from database —{' '}
+            {lastUpdated
+              ? <span style={{color:'#1a7a4a',fontSize:11}}>✓ Updated: {lastUpdated.toLocaleTimeString()}</span>
+              : <span style={{color:'#888',fontSize:11}}>Loading…</span>}
+          </p>
+        </div>
+        <button onClick={() => load(true)} disabled={refreshing}
+          style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 16px',
+            borderRadius:8, border:'1px solid #e2e8f0', background:'#fff',
+            color:'#475569', fontWeight:600, fontSize:13, cursor:'pointer', marginTop:4 }}>
+          <RefreshCw size={14} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+          Refresh
+        </button>
       </div>
 
-      {/* KPIs */}
-      <div className="kpi-grid">
-        {kpis.map((k, i) => (
-          <div className="kpi-card" key={i}>
-            <div className="kpi-icon" style={{ background: k.bg }}>
-              <k.icon size={18} color={k.color} />
-            </div>
-            <div className="kpi-label">{k.label}</div>
-            <div className="kpi-value" style={{ color: k.color }}>{k.value}</div>
-          </div>
+      {/* KPI Grid */}
+      <div className="kpi-grid" style={{ marginTop:20 }}>
+        {kpis.map((k,i) => (
+          <KpiCard key={i} {...k} />
         ))}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
-        {/* Age Group vs Risk */}
+      {/* Row 1: Interactive tabbed chart + Risk distribution + Gender */}
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:20, marginBottom:20, marginTop:20 }}>
         <div className="card">
-          <div className="card-header">
-            <span className="card-title">🎂 Driver Age vs Risk Score</span>
-            {filterRisk !== 'All' && <span style={{fontSize:11,color:'#2563eb',marginLeft:8}}>Filtered: {filterRisk} Risk</span>}
+          {/* Tab bar */}
+          <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap' }}>
+            {CHART_TABS.map(t => (
+              <button key={t.id} onClick={() => setActiveChart(t.id)}
+                style={{ padding:'6px 14px', borderRadius:20, border:'none', cursor:'pointer',
+                  fontSize:12, fontWeight:600, transition:'all .15s',
+                  background: activeChart===t.id ? '#0f4c81' : '#f1f5f9',
+                  color: activeChart===t.id ? '#fff' : '#475569' }}>
+                {t.label}
+              </button>
+            ))}
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={filteredAgeRisk}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="age_group" tick={{ fontSize:12 }} label={{ value:'Age Group (years)', position:'insideBottom', offset:-2, fontSize:11, fill:'#94a3b8' }} />
-              <YAxis domain={[0,100]} tick={{ fontSize:12 }} label={{ value:'Avg Risk Score', angle:-90, position:'insideLeft', fontSize:11, fill:'#94a3b8' }} />
-              <Tooltip formatter={(v) => [`${Number(v).toFixed(1)}`, 'Avg Risk Score']} />
-              <Bar dataKey="avg_risk" radius={[4,4,0,0]} name="Avg Risk Score">
-                {filteredAgeRisk.map((e, i) => (
-                  <Cell key={i} fill={e.avg_risk >= 70 ? '#c0392b' : e.avg_risk >= 50 ? '#e8a020' : '#1a7a4a'} />
-                ))}
-              </Bar>
+          {renderMainChart()}
+        </div>
+
+        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+          {/* Risk distribution donut */}
+          <div className="card" style={{ flex:1 }}>
+            <div className="card-header"><span className="card-title">🎯 Risk Distribution</span></div>
+            <ResponsiveContainer width="100%" height={150}>
+              <PieChart>
+                <Pie data={riskDist} dataKey="count" nameKey="category"
+                  cx="50%" cy="50%" innerRadius={40} outerRadius={65}
+                  paddingAngle={3}>
+                  {riskDist.map((_,i) => <Cell key={i} fill={RISK_COLORS[i]} />)}
+                </Pie>
+                <Tooltip formatter={(v) => [v.toLocaleString(),'Policies']} />
+                <Legend iconSize={9} wrapperStyle={{fontSize:10}} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Gender */}
+          <div className="card" style={{ flex:1 }}>
+            <div className="card-header"><span className="card-title">👥 Gender Split</span></div>
+            <ResponsiveContainer width="100%" height={150}>
+              <PieChart>
+                <Pie data={genderData} dataKey="value" nameKey="name"
+                  cx="50%" cy="50%" innerRadius={40} outerRadius={65}
+                  paddingAngle={3}
+                  label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}
+                  labelLine={false} fontSize={11}>
+                  <Cell fill="#0f4c81" />
+                  <Cell fill="#e8a020" />
+                </Pie>
+                <Tooltip formatter={(v)=>[v.toLocaleString(),'Policies']} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 2: Claim types + Vehicle breakdown */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
+        <div className="card">
+          <div className="card-header"><span className="card-title">🏥 Claims by Type</span></div>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={claimTypes.slice(0,8)} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" horizontal={false} />
+              <XAxis type="number" tick={{fontSize:10}}
+                label={{value:'Count', position:'insideBottom', offset:-2, fontSize:10, fill:'#94a3b8'}} />
+              <YAxis dataKey="type" type="category" tick={{fontSize:10}} width={140} />
+              <Tooltip formatter={(v,n) => n==='count'?[v.toLocaleString(),'Claims']:[fmtK(v),'Avg Amount']} />
+              <Bar dataKey="count" fill="#0f4c81" radius={[0,4,4,0]} name="count" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Risk Distribution */}
         <div className="card">
-          <div className="card-header"><span className="card-title">📊 Risk Category Distribution</span></div>
-          <ResponsiveContainer width="100%" height={220}>
+          <div className="card-header"><span className="card-title">🚗 Vehicle Type Distribution</span></div>
+          <ResponsiveContainer width="100%" height={260}>
             <PieChart>
-              <Pie data={stats?.risk_distribution||[]} dataKey="count" nameKey="category"
-                cx="50%" cy="50%" outerRadius={80}
-                label={({ category, percent }) => `${category?.split(' ')[0]} ${(percent*100).toFixed(0)}%`}
-                labelLine={false} fontSize={11}>
-                {(stats?.risk_distribution||[]).map((_, i) => (
-                  <Cell key={i} fill={['#1a7a4a','#e8a020','#c0392b'][i]} />
+              <Pie data={vehTypes} dataKey="value" nameKey="name"
+                cx="50%" cy="50%" outerRadius={90}
+                label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}
+                labelLine={true} fontSize={11}>
+                {vehTypes.map((e,i) => (
+                  <Cell key={i} fill={VEH_COLORS[e.name] || PROV_COLORS[i%PROV_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v) => [v.toLocaleString(), 'Policies']} />
+              <Tooltip formatter={(v)=>[v.toLocaleString(),'Policies']} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
-        {/* Claim Types */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">🏥 Claim Types Distribution</span></div>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={claimTypes.slice(0,8)} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis type="number" tick={{ fontSize:11 }} label={{ value:'Number of Claims', position:'insideBottom', offset:-2, fontSize:10, fill:'#94a3b8' }} />
-              <YAxis dataKey="type" type="category" tick={{ fontSize:10 }} width={130} />
-              <Tooltip formatter={(v, n) => n==='count' ? [v.toLocaleString(),'Claims'] : [`Rs.${(v/1000).toFixed(0)}K`,'Avg Amount']} />
-              <Bar dataKey="count" fill="#0f4c81" radius={[0,4,4,0]} name="count" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Feature Importance */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">🔬 ML Feature Importance (Risk Model)</span></div>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={[...featImp].sort((a,b)=>b.importance-a.importance).slice(0,8)} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis type="number" tick={{ fontSize:11 }} tickFormatter={v=>`${(v*100).toFixed(0)}%`}
-                label={{ value:'Importance (%)', position:'insideBottom', offset:-2, fontSize:10, fill:'#94a3b8' }} />
-              <YAxis dataKey="feature" type="category" tick={{ fontSize:10 }} width={160} />
-              <Tooltip formatter={(v) => [`${(v*100).toFixed(2)}%`,'Importance']} />
-              <Bar dataKey="importance" fill="#e8a020" radius={[0,4,4,0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
-        {/* Vehicle Type Breakdown — from DB */}
+      {/* Row 3: Province Risk — clickable rows + province pie drill-down */}
+      <div style={{ display:'grid', gridTemplateColumns:'3fr 2fr', gap:20, marginBottom:20 }}>
         <div className="card">
           <div className="card-header">
-            <span className="card-title">🚗 Vehicle Type Breakdown</span>
-            {filterVehicle !== 'All' && <span style={{fontSize:11,color:'#2563eb',marginLeft:8}}>Filtered: {filterVehicle}</span>}
+            <span className="card-title">🗺️ Province Risk Analysis</span>
+            {highlightProv && (
+              <button onClick={() => setHighlightProv(null)}
+                style={{ fontSize:11, padding:'2px 8px', borderRadius:6, border:'1px solid #e2e8f0',
+                  background:'#f1f5f9', cursor:'pointer', color:'#475569', marginLeft:8 }}>
+                Clear ✕
+              </button>
+            )}
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={filteredVeh} dataKey="value" nameKey="name"
-                cx="50%" cy="50%" outerRadius={80}
-                label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`}
-                labelLine={false} fontSize={11}>
-                {filteredVeh.map((e, i) => (
-                  <Cell key={i} fill={VEHICLE_COLORS[e.name] || C[i % C.length]} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(v) => [v.toLocaleString(), 'Policies']} />
-            </PieChart>
-          </ResponsiveContainer>
+          <ProvTable data={provRisk} highlight={highlightProv} onRowClick={setHighlightProv} />
         </div>
-
-        {/* Gender Distribution */}
         <div className="card">
-          <div className="card-header"><span className="card-title">👥 Policyholder Gender Distribution</span></div>
-          <ResponsiveContainer width="100%" height={220}>
+          <div className="card-header">
+            <span className="card-title">
+              {highlightProv ? `📍 ${highlightProv} Province` : '📍 Policy Distribution by Province'}
+            </span>
+          </div>
+          <ResponsiveContainer width="100%" height={310}>
             <PieChart>
-              <Pie data={genderData} dataKey="value" nameKey="name"
-                cx="50%" cy="50%" outerRadius={80}
-                label={({ name, value, percent }) => `${name}: ${value.toLocaleString()} (${(percent*100).toFixed(0)}%)`}
-                labelLine={true} fontSize={12}>
-                <Cell fill="#0f4c81" />
-                <Cell fill="#e8a020" />
+              <Pie
+                data={highlightProv
+                  ? provRisk.filter(p => p.province === highlightProv).map(p => ([
+                      {name:'Policies', value: p.policy_count},
+                      {name:'Claims',   value: p.claim_count},
+                    ])).flat()
+                  : provPie}
+                dataKey="value" nameKey={highlightProv ? 'name' : 'name'}
+                cx="50%" cy="50%" outerRadius={100}
+                label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}
+                labelLine={false} fontSize={10}>
+                {(highlightProv
+                  ? [{fill:'#0f4c81'},{fill:'#e8a020'}]
+                  : provPie.map((_,i) => ({fill:PROV_COLORS[i%PROV_COLORS.length]}))
+                ).map((c,i) => <Cell key={i} fill={c.fill} />)}
               </Pie>
-              <Tooltip formatter={(v) => [v.toLocaleString(), 'Policies']} />
+              <Tooltip formatter={(v)=>[v.toLocaleString(),'Count']} />
+              <Legend wrapperStyle={{fontSize:10}} />
             </PieChart>
           </ResponsiveContainer>
+          {highlightProv && (() => {
+            const p = provRisk.find(x => x.province === highlightProv)
+            if (!p) return null
+            return (
+              <div style={{ padding:'8px 12px', borderTop:'1px solid #f1f5f9', fontSize:12 }}>
+                {[['Policies', p.policy_count?.toLocaleString()],
+                  ['Claims',   p.claim_count?.toLocaleString()],
+                  ['Avg Risk', Number(p.avg_risk).toFixed(1)],
+                ].map(([k,v]) => (
+                  <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'3px 0' }}>
+                    <span style={{ color:'#64748b' }}>{k}</span>
+                    <span style={{ fontWeight:700 }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
         </div>
       </div>
 
-      {/* Province Risk Table — filterable */}
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">🗺️ Province Risk Analysis</span>
-          {filterProvince !== 'All' && <span style={{fontSize:11,color:'#2563eb',marginLeft:8}}>Filtered: {filterProvince}</span>}
-          {filterRisk !== 'All' && <span style={{fontSize:11,color:'#2563eb',marginLeft:8}}>| Risk: {filterRisk}</span>}
+      {/* Row 4: ML Feature Importance + Radar comparison */}
+      {featImp.length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">🔬 ML Feature Importance (Risk Model)</span></div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={featImp.slice(0,8)} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" horizontal={false} />
+                <XAxis type="number" tick={{fontSize:10}} tickFormatter={v=>`${(v*100).toFixed(0)}%`}
+                  label={{value:'Importance', position:'insideBottom', offset:-2, fontSize:10, fill:'#94a3b8'}} />
+                <YAxis dataKey="feature" type="category" tick={{fontSize:9}} width={160} />
+                <Tooltip formatter={(v)=>[`${(v*100).toFixed(2)}%`,'Importance']} />
+                <Bar dataKey="importance" fill="#6c3483" radius={[0,4,4,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><span className="card-title">📋 Portfolio Summary</span></div>
+            <div style={{ padding:'8px 0' }}>
+              {[
+                ['Total Policies',    (stats?.total_policies||0).toLocaleString(), '#0f4c81'],
+                ['Avg Premium',       fmtK(stats?.avg_premium||0),                 '#1a7a4a'],
+                ['Total Claims',      (stats?.total_claims||0).toLocaleString(),   '#e8a020'],
+                ['Claim Approval',    `${stats?.claim_approval_rate?.toFixed(1)||0}%`, '#1a7a4a'],
+                ['Avg Claim Amount',  fmtK(stats?.avg_claim_amount||0),            '#c0392b'],
+                ['High Risk Policies',`${stats?.accident_rate?.toFixed(1)||0}% of portfolio`, '#c0392b'],
+                ['NCB Holders',       `${stats?.ncb_rate?.toFixed(1)||0}%`,        '#0f4c81'],
+                ['Male / Female',     `${(stats?.gender_male||0).toLocaleString()} / ${(stats?.gender_female||0).toLocaleString()}`, '#6c3483'],
+                ['Risk Model AUC',    (stats?.model_auc||0.731).toFixed(3),        '#6c3483'],
+                ['Premium R²',        (stats?.model_r2||0.641).toFixed(3),         '#0e6655'],
+              ].map(([k,v,c]) => (
+                <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
+                  padding:'8px 12px', borderBottom:'1px solid #f8fafc' }}>
+                  <span style={{ fontSize:13, color:'#475569' }}>{k}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:c }}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Province</th>
-              <th>Policy Count</th>
-              <th>Avg Risk Score</th>
-              <th>Claim Count</th>
-              <th>Risk Level</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredProv.length === 0 ? (
-              <tr><td colSpan={5} style={{textAlign:'center',color:'#94a3b8',padding:20}}>No data for selected filters</td></tr>
-            ) : filteredProv.map((p, i) => (
-              <tr key={i}>
-                <td style={{ fontWeight:500 }}>{p.province}</td>
-                <td>{(p.policy_count||0).toLocaleString()}</td>
-                <td>
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <div style={{ flex:1, background:'#f0f4f8', borderRadius:4, height:8, overflow:'hidden' }}>
-                      <div style={{ width:`${(p.avg_risk/80)*100}%`, height:'100%', borderRadius:4,
-                        background: p.avg_risk>=70?'#c0392b':p.avg_risk>=40?'#e8a020':'#1a7a4a' }} />
-                    </div>
-                    <span style={{ fontWeight:600, fontSize:13 }}>{Number(p.avg_risk).toFixed(1)}</span>
-                  </div>
-                </td>
-                <td>{(p.claim_count||0).toLocaleString()}</td>
-                <td>
-                  <span className={`risk-badge ${p.avg_risk>=70?'risk-high':p.avg_risk>=40?'risk-medium':'risk-low'}`}>
-                    {p.avg_risk>=70?'High':p.avg_risk>=40?'Medium':'Low'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      )}
     </div>
   )
 }

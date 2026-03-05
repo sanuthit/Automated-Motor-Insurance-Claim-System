@@ -54,6 +54,7 @@ class MotorInsurancePremiumEngine:
         self.risk_features = []
         self.prem_features = []
         self.renew_features = []
+        self.risk_encoders = {}
 
         self.expected_severity = 725796
         self.optimal_threshold = 0.35
@@ -98,6 +99,7 @@ class MotorInsurancePremiumEngine:
 
                 self.risk_pipeline = (
                     arts.get("risk_pipeline")
+                    or arts.get("risk_model")
                     or arts.get("pipeline")
                     or arts.get("model")
                     or arts.get("clf")
@@ -109,6 +111,9 @@ class MotorInsurancePremiumEngine:
                     or arts.get("feature_list")
                     or []
                 )
+
+                # Store encoders for categorical feature encoding
+                self.risk_encoders = arts.get("encoders", {}).get("risk") or arts.get("encoders") or {}
 
             # ---- premium model ----
             prem_block = arts.get("premium")
@@ -236,18 +241,52 @@ class MotorInsurancePremiumEngine:
     # ----------------------------------------------------
 
     def _raw_dict(self, p):
+        age  = float(p.get("driver_age", 35))
+        exp  = float(p.get("years_exp", 5))
+        cc   = float(p.get("engine_cc", 1500))
+        va   = float(p.get("vehicle_age", 5))
+        si   = float(p.get("sum_insured", 1000000))
+        ncb  = float(p.get("prev_ncb", 0))
+
+        def enc_val(col, val):
+            le = self.risk_encoders.get(col) if isinstance(self.risk_encoders, dict) else None
+            if le is None:
+                return 0
+            try:
+                return int(le.transform([str(val)])[0])
+            except Exception:
+                try:
+                    return int(le.transform([le.classes_[0]])[0])
+                except Exception:
+                    return 0
 
         return {
-            "Driver_Age": float(p.get("driver_age", 35)),
-            "Engine_CC": float(p.get("engine_cc", 1500)),
-            "Vehicle_Age_Years": float(p.get("vehicle_age", 5)),
-            "Sum_Insured_LKR": float(p.get("sum_insured", 1000000)),
+            "Driver_Age":                age,
+            "Years_Driving_Experience":  exp,
+            "Experience_Rate":           exp / max(1, age - 16),
+            "Age_x_Exp":                 age * exp,
+            "Is_Young_Driver":           1 if age < 25 else 0,
+            "Is_Senior_Driver":          1 if age > 65 else 0,
+            "Is_New_Driver":             1 if exp < 2  else 0,
+            "Is_Exp_Driver":             1 if exp > 15 else 0,
+            "Engine_CC":                 cc,
+            "Vehicle_Age_Years":         va,
+            "CC_x_VehicleAge":           cc * va,
+            "High_CC":                   1 if cc > 2500 else 0,
+            "Old_Vehicle":               1 if va > 10  else 0,
+            "Previous_NCB_Percentage":   ncb,
+            "High_NCB":                  1 if ncb >= 30 else 0,
+            "Sum_Insured_LKR":           si,
+            "Gender_enc":                enc_val("Gender",            p.get("gender", "Male")),
+            "Vehicle_Type_enc":          enc_val("Vehicle_Type",      p.get("vehicle_type", "Car")),
+            "Occupation_enc":            enc_val("Occupation",        p.get("occupation", "Employed")),
+            "Province_enc":              enc_val("Province",          p.get("province", "Western")),
+            "Vehicle_Condition_enc":     enc_val("Vehicle_Condition", p.get("vehicle_condition", "Good")),
         }
 
     def _row(self, proposal, feats):
-
         d = self._raw_dict(proposal)
-
+        import pandas as pd
         return pd.DataFrame([[d.get(f, 0.0) for f in feats]], columns=feats)
 
     # ----------------------------------------------------

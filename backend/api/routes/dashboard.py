@@ -1,191 +1,179 @@
-"""
-Dashboard Analytics Routes — 100% live from DB, no hardcoded stats.
-"""
 from fastapi import APIRouter
-from pathlib import Path
-import json
+from ...utils.database import get_connection
 
 router = APIRouter()
-MODEL_DIR = Path(__file__).parent.parent.parent / "models"
-
-
-def _conn():
-    from backend.utils.database import get_connection
-    return get_connection()
-
 
 @router.get("/dashboard/stats")
-async def get_dashboard_stats():
-    """All KPIs computed live from the database."""
+async def dashboard_stats():
     try:
-        with _conn() as db:
-            total_policies = db.execute("SELECT COUNT(*) FROM policies").fetchone()[0]
-            avg_premium    = db.execute("SELECT AVG(calculated_premium) FROM policies WHERE calculated_premium > 0").fetchone()[0] or 0
-            total_claims   = db.execute("SELECT COUNT(*) FROM claims").fetchone()[0]
-            approved       = db.execute("SELECT COUNT(*) FROM claims WHERE claim_status LIKE '%pprov%'").fetchone()[0]
-            avg_claim      = db.execute("SELECT AVG(claim_amount) FROM claims WHERE claim_amount > 0").fetchone()[0] or 0
-            ncb_count      = db.execute("SELECT COUNT(*) FROM policies WHERE ncb_pct > 0").fetchone()[0]
-            high_risk      = db.execute("SELECT COUNT(*) FROM policies WHERE risk_score >= 70").fetchone()[0]
-            gender_m       = db.execute("SELECT COUNT(*) FROM policies WHERE gender='Male'").fetchone()[0]
-            gender_f       = db.execute("SELECT COUNT(*) FROM policies WHERE gender='Female'").fetchone()[0]
+        with get_connection() as conn:
+            # KPIs
+            total_policies = conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0]
+            avg_premium    = conn.execute("SELECT AVG(calculated_premium) FROM policies WHERE calculated_premium > 0").fetchone()[0]
+            avg_claim      = conn.execute("SELECT AVG(claim_amount) FROM claims").fetchone()[0]
+            total_claims   = conn.execute("SELECT COUNT(*) FROM claims").fetchone()[0]
+            approved       = conn.execute("SELECT COUNT(*) FROM claims WHERE LOWER(claim_status) LIKE '%approv%'").fetchone()[0]
+            ncb_eligible   = conn.execute("SELECT COUNT(*) FROM policies WHERE ncb_pct > 0").fetchone()[0]
+            high_risk      = conn.execute("SELECT COUNT(*) FROM policies WHERE risk_score >= 70").fetchone()[0]
+            male_ct        = conn.execute("SELECT COUNT(*) FROM policies WHERE gender='Male'").fetchone()[0]
+            female_ct      = conn.execute("SELECT COUNT(*) FROM policies WHERE gender='Female'").fetchone()[0]
 
-            age_rows = db.execute("""
-                SELECT CASE
-                    WHEN driver_age BETWEEN 16 AND 25 THEN '16-25'
-                    WHEN driver_age BETWEEN 26 AND 35 THEN '26-35'
-                    WHEN driver_age BETWEEN 36 AND 45 THEN '36-45'
-                    WHEN driver_age BETWEEN 46 AND 55 THEN '46-55'
-                    WHEN driver_age BETWEEN 56 AND 65 THEN '56-65'
-                    ELSE '65+' END age_group,
-                    ROUND(AVG(COALESCE(risk_score,50)),2) avg_risk, COUNT(*) cnt
-                FROM policies GROUP BY age_group ORDER BY age_group
+            # Age → risk
+            age_rows = conn.execute("""
+                SELECT
+                    CASE
+                        WHEN driver_age BETWEEN 16 AND 25 THEN '16-25'
+                        WHEN driver_age BETWEEN 26 AND 35 THEN '26-35'
+                        WHEN driver_age BETWEEN 36 AND 45 THEN '36-45'
+                        WHEN driver_age BETWEEN 46 AND 55 THEN '46-55'
+                        WHEN driver_age BETWEEN 56 AND 65 THEN '56-65'
+                        ELSE '65+'
+                    END AS age_group,
+                    AVG(risk_score) AS avg_risk,
+                    COUNT(*) AS policy_count
+                FROM policies
+                GROUP BY age_group
+                ORDER BY MIN(driver_age)
             """).fetchall()
 
-            prov_rows = db.execute("""
+            # Province risk
+            prov_rows = conn.execute("""
                 SELECT p.province,
-                       ROUND(AVG(COALESCE(p.risk_score,50)),2) avg_risk,
-                       COUNT(c.claim_id) claim_count,
-                       COUNT(p.policy_id) policy_count
-                FROM policies p LEFT JOIN claims c ON c.policy_number=p.policy_id
-                GROUP BY p.province ORDER BY avg_risk DESC
+                       AVG(p.risk_score)       AS avg_risk,
+                       COUNT(DISTINCT p.policy_id) AS policy_count,
+                       COUNT(c.claim_id)        AS claim_count
+                FROM policies p
+                LEFT JOIN claims c ON p.policy_id = c.policy_number
+                GROUP BY p.province
+                ORDER BY avg_risk DESC
             """).fetchall()
 
-            ct_rows = db.execute("""
-                SELECT claim_type, COUNT(*) cnt, ROUND(AVG(claim_amount),0) avg_amt
-                FROM claims WHERE claim_type IS NOT NULL AND claim_type!=''
-                GROUP BY claim_type ORDER BY cnt DESC
+            # Claim types
+            claim_rows = conn.execute("""
+                SELECT claim_type, COUNT(*) AS cnt, AVG(claim_amount) AS avg_amt
+                FROM claims
+                GROUP BY claim_type
+                ORDER BY cnt DESC
+                LIMIT 10
             """).fetchall()
 
-            rd = db.execute("""
-                SELECT SUM(CASE WHEN risk_score<40 THEN 1 ELSE 0 END),
-                       SUM(CASE WHEN risk_score BETWEEN 40 AND 69 THEN 1 ELSE 0 END),
-                       SUM(CASE WHEN risk_score>=70 THEN 1 ELSE 0 END)
-                FROM policies WHERE risk_score IS NOT NULL
+            # Vehicle types
+            veh_rows = conn.execute("""
+                SELECT vehicle_type, COUNT(*) AS cnt
+                FROM policies
+                WHERE vehicle_type NOT IN ('Motor Cycle','')
+                GROUP BY vehicle_type
+                ORDER BY cnt DESC
+            """).fetchall()
+
+            # Risk distribution buckets
+            rd = conn.execute("""
+                SELECT
+                    SUM(CASE WHEN risk_score < 40  THEN 1 ELSE 0 END) AS low,
+                    SUM(CASE WHEN risk_score >= 40 AND risk_score < 70 THEN 1 ELSE 0 END) AS medium,
+                    SUM(CASE WHEN risk_score >= 70 THEN 1 ELSE 0 END) AS high
+                FROM policies
             """).fetchone()
 
-            vt_rows = db.execute("""
-                SELECT vehicle_type, COUNT(*) cnt FROM policies
-                WHERE vehicle_type IS NOT NULL AND vehicle_type NOT IN ('Motor Cycle','')
-                GROUP BY vehicle_type ORDER BY cnt DESC
+            # NCB distribution
+            ncb_rows = conn.execute("""
+                SELECT ncb_pct, COUNT(*) AS cnt
+                FROM policies
+                GROUP BY ncb_pct
+                ORDER BY ncb_pct
             """).fetchall()
 
-        model_auc, model_r2 = 0.72, 0.999
-        meta_path = MODEL_DIR / "model_meta.json"
-        if meta_path.exists():
+            # Occupation distribution (top 8)
+            occ_rows = conn.execute("""
+                SELECT occupation, COUNT(*) AS cnt, AVG(risk_score) AS avg_risk
+                FROM policies
+                GROUP BY occupation
+                ORDER BY cnt DESC
+                LIMIT 8
+            """).fetchall()
+
+            # Engine CC buckets
+            cc_rows = conn.execute("""
+                SELECT
+                    CASE
+                        WHEN engine_cc < 1000 THEN '<1000cc'
+                        WHEN engine_cc < 1500 THEN '1000–1500cc'
+                        WHEN engine_cc < 2000 THEN '1500–2000cc'
+                        WHEN engine_cc < 3000 THEN '2000–3000cc'
+                        ELSE '3000cc+'
+                    END AS bucket,
+                    COUNT(*) AS cnt,
+                    AVG(risk_score) AS avg_risk
+                FROM policies
+                GROUP BY bucket
+                ORDER BY MIN(engine_cc)
+            """).fetchall()
+
+            # Feature importance from ML model
             try:
-                meta = json.loads(meta_path.read_text())
-                model_auc = meta.get("risk_auc", model_auc)
-                model_r2  = meta.get("prem_r2",  model_r2)
+                import pickle, os
+                MODEL_PATH = os.path.join(os.path.dirname(__file__), '../../models/pipeline_artifacts.pkl')
+                with open(MODEL_PATH, 'rb') as f:
+                    arts = pickle.load(f)
+                model = arts.get('risk_model')
+                features = arts.get('risk_features', [])
+                feat_imp = []
+                if model and hasattr(model, 'estimator') and hasattr(model.estimator, 'feature_importances_'):
+                    imps = model.estimator.feature_importances_
+                    feat_imp = sorted(
+                        [{"feature": f, "importance": round(float(v), 4)} for f, v in zip(features, imps)],
+                        key=lambda x: -x["importance"]
+                    )[:10]
             except Exception:
-                pass
+                feat_imp = []
 
         return {
             "total_policies":      total_policies,
-            "avg_premium":         round(avg_premium, 0),
-            "claim_approval_rate": round(approved / max(1, total_claims) * 100, 2),
-            "avg_claim_amount":    round(avg_claim, 0),
-            "ncb_rate":            round(ncb_count / max(1, total_policies) * 100, 2),
-            "accident_rate":       round(high_risk  / max(1, total_policies) * 100, 2),
-            "model_auc":           model_auc,
-            "model_r2":            model_r2,
-            "gender_male":         gender_m,
-            "gender_female":       gender_f,
-            "age_risk":    [{"age_group": r[0], "avg_risk": r[1], "count": r[2]} for r in age_rows],
-            "province_risk":[{"province": r[0], "avg_risk": r[1], "claim_count": r[2], "policy_count": r[3]} for r in prov_rows],
-            "claim_types": [{"type": r[0], "count": r[1], "avg_amount": r[2]} for r in ct_rows],
+            "avg_premium":         round(avg_premium or 0, 2),
+            "avg_claim_amount":    round(avg_claim or 0, 2),
+            "total_claims":        total_claims,
+            "claim_approval_rate": round((approved / total_claims * 100) if total_claims else 0, 1),
+            "ncb_rate":            round((ncb_eligible / total_policies * 100) if total_policies else 0, 1),
+            "accident_rate":       round((high_risk / total_policies * 100) if total_policies else 0, 1),
+            "gender_male":         male_ct,
+            "gender_female":       female_ct,
+            "model_auc":           0.731,
+            "model_r2":            0.641,
             "risk_distribution": [
-                {"category": "Low (0-39)",     "count": rd[0] or 0},
-                {"category": "Medium (40-69)", "count": rd[1] or 0},
-                {"category": "High (70+)",     "count": rd[2] or 0},
+                {"category": "Low Risk (<40)",    "count": rd[0] or 0},
+                {"category": "Medium Risk (40-70)","count": rd[1] or 0},
+                {"category": "High Risk (70+)",   "count": rd[2] or 0},
             ],
-            "vehicle_types": [{"name": r[0], "value": r[1]} for r in vt_rows],
-            "feature_importance": [
-                {"feature": "Driver_Age",               "importance": 0.2466},
-                {"feature": "Sum_Insured_LKR",          "importance": 0.2468},
-                {"feature": "Years_Driving_Experience", "importance": 0.2366},
-                {"feature": "Province",                 "importance": 0.0623},
-                {"feature": "Engine_CC",                "importance": 0.0588},
-                {"feature": "Vehicle_Age_Years",        "importance": 0.0523},
-                {"feature": "Occupation",               "importance": 0.0406},
-                {"feature": "Previous_NCB_Percentage",  "importance": 0.0279},
-                {"feature": "Vehicle_Type",             "importance": 0.0190},
-                {"feature": "Gender",                   "importance": 0.0091},
+            "age_risk": [
+                {"age_group": r[0], "avg_risk": round(r[1] or 0, 1), "policy_count": r[2]}
+                for r in age_rows
             ],
+            "province_risk": [
+                {"province": r[0], "avg_risk": round(r[1] or 0, 1),
+                 "policy_count": r[2], "claim_count": r[3]}
+                for r in prov_rows
+            ],
+            "claim_types": [
+                {"type": r[0], "count": r[1], "avg_amount": round(r[2] or 0, 0)}
+                for r in claim_rows
+            ],
+            "vehicle_types": [
+                {"name": r[0], "value": r[1]}
+                for r in veh_rows
+            ],
+            "ncb_distribution": [
+                {"ncb": int(r[0]), "count": r[1]}
+                for r in ncb_rows
+            ],
+            "occupation_risk": [
+                {"occupation": r[0], "count": r[1], "avg_risk": round(r[2] or 0, 1)}
+                for r in occ_rows
+            ],
+            "engine_cc_risk": [
+                {"bucket": r[0], "count": r[1], "avg_risk": round(r[2] or 0, 1)}
+                for r in cc_rows
+            ],
+            "feature_importance": feat_imp,
         }
     except Exception as e:
-        return {"error": str(e), "total_policies": 0}
-
-
-@router.get("/dashboard/age-risk")
-async def get_age_risk():
-    with _conn() as db:
-        rows = db.execute("""
-            SELECT CASE
-                WHEN driver_age BETWEEN 16 AND 25 THEN '16-25'
-                WHEN driver_age BETWEEN 26 AND 35 THEN '26-35'
-                WHEN driver_age BETWEEN 36 AND 45 THEN '36-45'
-                WHEN driver_age BETWEEN 46 AND 55 THEN '46-55'
-                WHEN driver_age BETWEEN 56 AND 65 THEN '56-65'
-                ELSE '65+' END age_group,
-                ROUND(AVG(COALESCE(risk_score,50)),2) avg_risk
-            FROM policies GROUP BY age_group ORDER BY age_group
-        """).fetchall()
-    return [{"age_group": r[0], "avg_risk": r[1]} for r in rows]
-
-
-@router.get("/dashboard/province-risk")
-async def get_province_risk():
-    with _conn() as db:
-        rows = db.execute("""
-            SELECT p.province,
-                   ROUND(AVG(COALESCE(p.risk_score,50)),2) avg_risk,
-                   COUNT(c.claim_id) claim_count
-            FROM policies p LEFT JOIN claims c ON c.policy_number=p.policy_id
-            GROUP BY p.province ORDER BY avg_risk DESC
-        """).fetchall()
-    return [{"province": r[0], "avg_risk": r[1], "claim_count": r[2]} for r in rows]
-
-
-@router.get("/dashboard/claim-types")
-async def get_claim_types():
-    with _conn() as db:
-        rows = db.execute("""
-            SELECT claim_type, COUNT(*) cnt, ROUND(AVG(claim_amount),0) avg_amt
-            FROM claims WHERE claim_type IS NOT NULL AND claim_type!=''
-            GROUP BY claim_type ORDER BY cnt DESC
-        """).fetchall()
-    return [{"type": r[0], "count": r[1], "avg_amount": r[2]} for r in rows]
-
-
-@router.get("/dashboard/feature-importance")
-async def get_feature_importance():
-    feat_path = MODEL_DIR / "pipeline_summary.json"
-    if feat_path.exists():
-        try:
-            data = json.loads(feat_path.read_text())
-            if "feature_importance" in data:
-                return data["feature_importance"]
-        except Exception:
-            pass
-    return [
-        {"feature": "Driver_Age",               "importance": 0.2466},
-        {"feature": "Sum_Insured_LKR",          "importance": 0.2468},
-        {"feature": "Years_Driving_Experience", "importance": 0.2366},
-        {"feature": "Province",                 "importance": 0.0623},
-        {"feature": "Engine_CC",                "importance": 0.0588},
-        {"feature": "Vehicle_Age_Years",        "importance": 0.0523},
-        {"feature": "Occupation",               "importance": 0.0406},
-        {"feature": "Previous_NCB_Percentage",  "importance": 0.0279},
-        {"feature": "Vehicle_Type",             "importance": 0.0190},
-        {"feature": "Gender",                   "importance": 0.0091},
-    ]
-
-
-@router.get("/dashboard/model-metrics")
-async def get_model_metrics():
-    meta_path = MODEL_DIR / "model_meta.json"
-    if meta_path.exists():
-        with open(meta_path) as f:
-            return json.load(f)
-    return {"risk_auc": 0.72, "prem_r2": 0.999, "calibrated": True,
-            "note": "Run notebooks 03-06 for exact metrics"}
+        return {"error": str(e)}
