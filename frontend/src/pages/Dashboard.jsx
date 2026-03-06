@@ -135,15 +135,17 @@ export default function Dashboard() {
   // Province pie for drill-down
   const provPie = provRisk.map((p,i) => ({ name: p.province, value: p.policy_count, fill: PROV_COLORS[i%PROV_COLORS.length] }))
 
+  const act = stats?.actuarial || {}
+
   const kpis = [
     { label:'Total Policies',    value:(stats?.total_policies||0).toLocaleString(), icon:FileText,      color:'#0f4c81', bg:'#eff6ff',  sub:'All active records' },
     { label:'Avg Premium',       value:fmtK(stats?.avg_premium||0),                 icon:TrendingUp,    color:'#1a7a4a', bg:'#f0fdf4',  sub:'Per policy/year' },
-    { label:'Claim Approval',    value:`${(stats?.claim_approval_rate||0).toFixed(1)}%`, icon:CheckCircle, color:'#1a7a4a', bg:'#f0fdf4', sub:`${(stats?.total_claims||0).toLocaleString()} total claims` },
-    { label:'Avg Claim Amount',  value:fmtK(stats?.avg_claim_amount||0),             icon:Shield,        color:'#e8a020', bg:'#fffbeb',  sub:'Per approved claim' },
+    { label:'Pure Premium',      value:fmtK(act.pure_premium||0),                   icon:Shield,        color:'#e8a020', bg:'#fffbeb',  sub:`freq×sev = ${(act.frequency||0).toFixed(4)} × Rs.${((act.avg_severity||0)/1000).toFixed(0)}K` },
+    { label:'Avg Claim',         value:fmtK(stats?.avg_claim_amount||0),             icon:Shield,        color:'#c0392b', bg:'#fef2f2',  sub:'E[severity | claim]' },
+    { label:'Claim Frequency',   value:`${((act.frequency||0)*100).toFixed(1)}%`,    icon:AlertTriangle, color:'#c0392b', bg:'#fef2f2',  sub:'P(claim) from DB' },
     { label:'NCB Eligible',      value:`${(stats?.ncb_rate||0).toFixed(1)}%`,         icon:Award,         color:'#0f4c81', bg:'#eff6ff',  sub:'No-claim bonus holders' },
-    { label:'High Risk Rate',    value:`${(stats?.accident_rate||0).toFixed(1)}%`,    icon:AlertTriangle, color:'#c0392b', bg:'#fef2f2',  sub:'Risk score ≥ 70' },
-    { label:'Risk Model AUC',    value:(stats?.model_auc||0).toFixed(3),              icon:Brain,         color:'#6c3483', bg:'#faf5ff',  sub:'Stacking Ensemble' },
-    { label:'Premium R²',        value:(stats?.model_r2||0).toFixed(3),               icon:Brain,         color:'#0e6655', bg:'#f0fdfa',  sub:'HistGBM no-leakage' },
+    { label:'Risk Model AUC',    value:(act.model_auc||0).toFixed(4),                icon:Brain,         color:'#6c3483', bg:'#faf5ff',  sub:`from model_metadata.json v${act.model_version||'?'}` },
+    { label:'Rate Model R²',     value:(act.rate_r2||0).toFixed(4),                  icon:Brain,         color:'#0e6655', bg:'#f0fdfa',  sub:`Trained on ${(act.n_training||0).toLocaleString()} policies` },
   ]
 
   const CHART_TABS = [
@@ -426,16 +428,18 @@ export default function Dashboard() {
             <div className="card-header"><span className="card-title">📋 Portfolio Summary</span></div>
             <div style={{ padding:'8px 0' }}>
               {[
-                ['Total Policies',    (stats?.total_policies||0).toLocaleString(), '#0f4c81'],
-                ['Avg Premium',       fmtK(stats?.avg_premium||0),                 '#1a7a4a'],
-                ['Total Claims',      (stats?.total_claims||0).toLocaleString(),   '#e8a020'],
-                ['Claim Approval',    `${stats?.claim_approval_rate?.toFixed(1)||0}%`, '#1a7a4a'],
-                ['Avg Claim Amount',  fmtK(stats?.avg_claim_amount||0),            '#c0392b'],
-                ['High Risk Policies',`${stats?.accident_rate?.toFixed(1)||0}% of portfolio`, '#c0392b'],
-                ['NCB Holders',       `${stats?.ncb_rate?.toFixed(1)||0}%`,        '#0f4c81'],
-                ['Male / Female',     `${(stats?.gender_male||0).toLocaleString()} / ${(stats?.gender_female||0).toLocaleString()}`, '#6c3483'],
-                ['Risk Model AUC',    (stats?.model_auc||0.731).toFixed(3),        '#6c3483'],
-                ['Premium R²',        (stats?.model_r2||0.641).toFixed(3),         '#0e6655'],
+                ['Total Policies',    (stats?.total_policies||0).toLocaleString(),    '#0f4c81'],
+                ['Avg Premium',       fmtK(stats?.avg_premium||0),                    '#1a7a4a'],
+                ['Claim Frequency',   `${((act.frequency||0)*100).toFixed(2)}% of policies`, '#e8a020'],
+                ['Avg Severity',      fmtK(act.avg_severity||0),                      '#c0392b'],
+                ['Pure Premium',      fmtK(act.pure_premium||0),                      '#c0392b'],
+                ['NCB Holders',       `${(stats?.ncb_rate||0).toFixed(1)}%`,          '#0f4c81'],
+                ['High Risk Rate',    `${(stats?.accident_rate||0).toFixed(1)}%`,     '#c0392b'],
+                ['Risk Model AUC',    (act.model_auc||0).toFixed(4),                  '#6c3483'],
+                ['Rate Model R²',     (act.rate_r2||0).toFixed(4),                    '#0e6655'],
+                ['Renewal Model R²',  (act.renewal_r2||0).toFixed(4),                 '#0e6655'],
+                ['Model Version',     act.model_version||'unknown',                    '#475569'],
+                ['Blend',             act.blend||'35% Act + 65% ML',                  '#475569'],
               ].map(([k,v,c]) => (
                 <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
                   padding:'8px 12px', borderBottom:'1px solid #f8fafc' }}>
