@@ -1,0 +1,117 @@
+{
+  "_meta": {
+    "computed_from": "claims table \u2014 dynamic (not hardcoded)",
+    "n_claims": 33215,
+    "n_policies": 48244,
+    "source": "insurance.db / claims"
+  },
+  "overall": {
+    "frequency": 0.688479,
+    "avg_severity": 725796.06,
+    "pure_premium": 499695.64,
+    "n_claims": 33215,
+    "n_policies": 48244
+  },
+  "by_driver_age": {
+    "Under25": {
+      "n": 6768,
+      "avg_severity": 745220.64
+    },
+    "25-34": {
+      "n": 9827,
+      "avg_severity": 709291.79
+    },
+    "35-49": {
+      "n": 13053,
+      "avg_severity": 725052.95
+    },
+    "50-64": {
+      "n": 3372,
+      "avg_severity": 743070.87
+    },
+    "65plus": {
+      "n": 195,
+      "avg_severity": 634365.95
+    }
+  },
+  "by_province": {
+    "Central": {
+      "n": 4922,
+      "avg_severity": 720351.71
+    },
+    "Eastern": {
+      "n": 2719,
+      "avg_severity": 714530.42
+    },
+    "North Central": {
+      "n": 1325,
+      "avg_severity": 700337.11
+    },
+    "North Western": {
+      "n": 2321,
+      "avg_severity": 712056.35
+    },
+    "Northern": {
+      "n": 2676,
+      "avg_severity": 705073.68
+    },
+    "Sabaragamuwa": {
+      "n": 1024,
+      "avg_severity": 711245.58
+    },
+    "Southern": {
+      "n": 3995,
+      "avg_severity": 702804.51
+    },
+    "Uva": {
+      "n": 999,
+      "avg_severity": 746167.44
+    },
+    "Western": {
+      "n": 13234,
+      "avg_severity": 745813.03
+    }
+  },
+  "by_claim_type": {
+    "Theft - Vehicle": {
+      "n": 619,
+      "avg_severity": 5173125.41
+    },
+    "Fire": {
+      "n": 1012,
+      "avg_severity": 4221766.16
+    },
+    "Flood": {
+      "n": 1259,
+      "avg_severity": 2257682.11
+    },
+    "Riot": {
+      "n": 1048,
+      "avg_severity": 1617778.17
+    },
+    "Malicious Damage": {
+      "n": 676,
+      "avg_severity": 857127.01
+    },
+    "Accidental Damage": {
+      "n": 18136,
+      "avg_severity": 634743.74
+    },
+    "Third Party Injury": {
+      "n": 1655,
+      "avg_severity": 1523.61
+    },
+    "Third Party Property": {
+      "n": 3219,
+      "avg_severity": 268.79
+    },
+    "Theft - Parts": {
+      "n": 2588,
+      "avg_severity": 82.63
+    },
+    "Windscreen": {
+      "n": 3003,
+      "avg_severity": 46.65
+    }
+  }
+}

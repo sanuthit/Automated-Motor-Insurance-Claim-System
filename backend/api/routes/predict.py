@@ -69,12 +69,26 @@ async def predict_premium(req: PolicyRequest):
     result.setdefault("ncb_pct", float(req.prev_ncb))
     result.setdefault("breakdown", {})
 
-    # Always ensure explanation is populated — rule-based fallback if ML not available
-    if not result.get("explanation", {}).get("available"):
+    # Always compute REAL SHAP values using the interventional engine
+    # Falls back to rule-based only if SHAP engine not yet ready (first boot)
+    shap_result = None
+    shap_engine = getattr(engine, "shap_engine", None)
+    if shap_engine and shap_engine.is_ready():
+        try:
+            # Build numpy array in exact training feature order
+            inst_vec = engine._build_row(engine._risk_features_dict(proposal), engine.risk_features)
+            shap_result = shap_engine.compute(inst_vec)
+        except Exception as _se:
+            print(f"SHAP compute error: {_se}")
+
+    if shap_result and shap_result.get("available"):
+        result["explanation"] = shap_result
+    else:
+        # Genuine fallback (SHAP background not loaded yet)
         result["explanation"] = {
             "available": True,
             "is_ml_shap": False,
-            "note": "Rule-based explanation — train ML pipeline for real SHAP values",
+            "note": "Rule-based attribution (SHAP background initialising)",
             "top_drivers": _build_shap_reasons(proposal, result.get("risk_score", 50)),
         }
 
@@ -188,7 +202,7 @@ def _deterministic_premium(p: dict) -> dict:
         "explanation": {
             "available": True,
             "is_ml_shap": False,
-            "note": "Rule-based explanation — train ML pipeline for real SHAP values",
+            "note": "Rule-based fallback (ML models not yet loaded)",
             "top_drivers": _build_shap_reasons(p, risk),
         }
     }

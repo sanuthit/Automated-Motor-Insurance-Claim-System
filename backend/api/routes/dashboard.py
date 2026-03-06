@@ -127,6 +127,18 @@ async def dashboard_stats():
             except Exception:
                 feat_imp = []
 
+        # Load model metrics from governance file (not hardcoded)
+        _meta = {}
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _mp = _Path(__file__).resolve().parents[2] / "models" / "model_metadata.json"
+            if _mp.exists():
+                with open(_mp) as _f:
+                    _meta = _json.load(_f)
+        except Exception:
+            pass
+
         return {
             "total_policies":      total_policies,
             "avg_premium":         round(avg_premium or 0, 2),
@@ -137,8 +149,8 @@ async def dashboard_stats():
             "accident_rate":       round((high_risk / total_policies * 100) if total_policies else 0, 1),
             "gender_male":         male_ct,
             "gender_female":       female_ct,
-            "model_auc":           0.731,
-            "model_r2":            0.641,
+            "model_auc":           _meta.get("risk_classifier", {}).get("auc_roc", 0.0),
+            "model_r2":            _meta.get("rate_model", {}).get("r2_score", 0.0),
             "risk_distribution": [
                 {"category": "Low Risk (<40)",    "count": rd[0] or 0},
                 {"category": "Medium Risk (40-70)","count": rd[1] or 0},
@@ -174,6 +186,19 @@ async def dashboard_stats():
                 for r in cc_rows
             ],
             "feature_importance": feat_imp,
+            # Frequency-Severity Actuarial Model metrics (from DB — not hardcoded)
+            "actuarial": {
+                "frequency":    round(total_claims / total_policies, 6) if total_policies else 0,
+                "avg_severity": round(conn.execute("SELECT AVG(claim_amount) FROM claims WHERE claim_amount > 0").fetchone()[0] or 0, 0),
+                "pure_premium": round((total_claims / total_policies) * (conn.execute("SELECT AVG(claim_amount) FROM claims WHERE claim_amount > 0").fetchone()[0] or 0), 0) if total_policies else 0,
+                "model_auc":    _meta.get("risk_classifier", {}).get("auc_roc", 0.0),
+                "model_brier":  _meta.get("risk_classifier", {}).get("brier_score", 0.0),
+                "rate_r2":      _meta.get("rate_model", {}).get("r2_score", 0.0),
+                "renewal_r2":   _meta.get("renewal_model", {}).get("r2_score", 0.0),
+                "blend":        "35% Actuarial + 65% ML",
+                "n_training":   _meta.get("dataset", {}).get("n_training_records", 0),
+                "model_version": _meta.get("model_version", "unknown"),
+            },
         }
     except Exception as e:
         return {"error": str(e)}

@@ -49,6 +49,11 @@ class MotorInsurancePremiumEngine:
 
         # Governance metadata
         self.metadata          = {}
+        # Dynamic severity (from DB-computed JSON — not hardcoded)
+        self.severity_model    = {}
+        self.base_frequency    = 0.6885   # overwritten by _load()
+        # Real SHAP engine
+        self.shap_engine       = None
 
         self._ready = False
         self._load()
@@ -78,7 +83,21 @@ class MotorInsurancePremiumEngine:
             self.AGE_LOADING = {i: min(0.002 * i, 0.020) for i in range(10)}
             print("WARNING: actuarial_table.json not found — using fallback rates")
 
-        # 2. Governance metadata
+        # 2. Dynamic severity model from claims DB (not hardcoded)
+        sev_path = MODEL_DIR / "severity_model.json"
+        if sev_path.exists():
+            with open(sev_path) as f:
+                self.severity_model = json.load(f)
+            ov = self.severity_model.get("overall", {})
+            self.expected_severity = ov.get("avg_severity", 725_796)
+            self.base_frequency    = ov.get("frequency", 0.6885)
+            print(f"Severity: freq={self.base_frequency:.4f} sev=Rs.{self.expected_severity:,.0f} "
+                  f"pure_premium=Rs.{self.base_frequency*self.expected_severity:,.0f}")
+        else:
+            self.base_frequency = 0.6885
+            print("WARNING: severity_model.json not found — using fallback severity")
+
+        # 3. Governance metadata
         meta_path = MODEL_DIR / "model_metadata.json"
         if meta_path.exists():
             with open(meta_path) as f:
@@ -116,6 +135,15 @@ class MotorInsurancePremiumEngine:
             # ── Renewal model ────────────────────────────────────────────
             self.renew_pipeline  = arts.get("renewal_model")
             self.renew_features  = arts.get("renewal_features", [])
+
+            # 4. SHAP engine (real interventional SHAP, no external lib)
+            if self.risk_pipeline is not None:
+                try:
+                    from backend.utils.shap_engine import SHAPEngine
+                    self.shap_engine = SHAPEngine(self.risk_pipeline, self.risk_features)
+                    print(f"SHAP engine ready (baseline={self.shap_engine.baseline_prob:.4f})")
+                except Exception as e:
+                    print(f"SHAP engine init error: {e}")
 
             self._ready = True
             print(f"ML models loaded: risk={self.risk_pipeline is not None}, "
@@ -253,10 +281,13 @@ class MotorInsurancePremiumEngine:
             "Rebate_Approved":              reb,
         }
 
-    def _build_row(self, feature_dict: dict, feature_list: list) -> pd.DataFrame:
-        """Convert feature dict to DataFrame with columns in exact training order."""
-        vals = [feature_dict.get(f, 0.0) for f in feature_list]
-        return pd.DataFrame([vals], columns=feature_list)
+    def _build_row(self, feature_dict: dict, feature_list: list) -> np.ndarray:
+        """
+        Convert feature dict to numpy array in exact training column order.
+        Returns numpy array (not DataFrame) to match how the model was trained
+        (HistGBM was fitted without feature names — using array avoids warnings).
+        """
+        return np.array([[feature_dict.get(f, 0.0) for f in feature_list]])
 
     # ─────────────────────────────────────────────────────────────────────────
     # ACTUARIAL PREMIUM (from JSON table — no hardcoded numbers in code)
