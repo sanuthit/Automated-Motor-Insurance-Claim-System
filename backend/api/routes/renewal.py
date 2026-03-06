@@ -243,48 +243,40 @@ async def calculate_renewal(req: RenewalCalcRequest):
             "vehicle_condition": policy.get("vehicle_condition", "Good"),
             "is_blacklisted":    "Yes" if is_blacklisted else "No",
         }
-        if engine.is_ready():
-            X_r = engine._row(proposal, engine.risk_features)
-            acc_prob_val = float(engine.risk_pipeline.predict_proba(X_r)[0, 1])
-            risk_score = min(100, max(0, int(acc_prob_val * 100)))
-            risk_label = (
+        if engine.is_ready() and engine.risk_pipeline is not None:
+            # ── Step 1: risk probability from ML classifier ──────────────
+            inst_vec     = engine._build_row(
+                engine._risk_features_dict(proposal), engine.risk_features
+            )
+            acc_prob_val = float(engine.risk_pipeline.predict_proba(inst_vec)[0, 1])
+            risk_score   = min(100, max(0, int(acc_prob_val * 100)))
+            risk_label   = (
                 "HIGH"   if acc_prob_val >= 0.5
                 else "MEDIUM" if acc_prob_val >= engine.optimal_threshold
                 else "LOW"
             )
             acc_prob = round(acc_prob_val * 100, 2)
-            explanation = engine.explain(proposal)
+
+            # ── Step 2: real interventional SHAP via shap_engine ─────────
+            shap_eng = getattr(engine, "shap_engine", None)
+            if shap_eng and shap_eng.is_ready():
+                explanation = shap_eng.compute(inst_vec)
+            else:
+                explanation = {"available": False, "is_ml_shap": False,
+                               "note": "SHAP background not loaded"}
         else:
-            # ── Rule-based fallback risk score (always show something) ────
-            age = int(policy.get("driver_age", 35))
-            exp = int(policy.get("years_exp", 5))
-            va  = int(policy.get("vehicle_age", 5))
-            cc  = int(policy.get("engine_cc", 1500))
-            prov = policy.get("province", "Western")
-            risk = 30
-            if age < 25:    risk += 22
-            elif age > 65:  risk += 12
-            if exp < 3:     risk += 18
-            if va > 12:     risk += 10
-            if cc > 2500:   risk += 8
-            if prov == "Western": risk += 6
-            if number_of_claims > 0: risk += number_of_claims * 8
-            if is_blacklisted: risk += 25
-            risk -= int(prev_ncb * 0.3)
-            risk_score = max(5, min(95, risk))
-            risk_label = "HIGH" if risk_score >= 70 else "MEDIUM" if risk_score >= 40 else "LOW"
-            acc_prob   = round(risk_score * 0.7, 1)
-            explanation = {
-                "available": True,
-                "is_ml_shap": False,
-                "note": "Rule-based explanation — train ML pipeline for real SHAP values",
-                "top_drivers": _renewal_shap_reasons(proposal, number_of_claims, risk_score),
-            }
+            risk_score  = 50
+            risk_label  = "MEDIUM"
+            acc_prob    = 35.0
+            explanation = {"available": False, "is_ml_shap": False,
+                           "note": "ML model not loaded"}
     except Exception as ex:
-        print(f"Risk scoring error for renewal: {ex}")
-        risk_score = 50
-        risk_label = "MEDIUM"
-        acc_prob   = 35.0
+        import traceback
+        print(f"Risk scoring error for renewal: {ex}\n{traceback.format_exc()}")
+        risk_score  = None
+        risk_label  = None
+        acc_prob    = None
+        explanation = {"available": False, "is_ml_shap": False, "error": str(ex)}
 
     return {
         "policy_id":            req.policy_id,

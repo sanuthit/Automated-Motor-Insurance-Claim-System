@@ -36,7 +36,7 @@ class MotorInsurancePremiumEngine:
         self.risk_encoders    = {}
         self.premium_encoders = {}     # NEW: separate encoders for rate model
 
-        self.expected_severity = 725_796   # from DB: AVG(claim_amount)
+        self.expected_severity: float = 0.0   # populated by _load() from severity_model.json or DB
         self.optimal_threshold = 0.35      # cost-sensitive threshold
 
         # Actuarial table (loaded from JSON — not hardcoded)
@@ -51,7 +51,7 @@ class MotorInsurancePremiumEngine:
         self.metadata          = {}
         # Dynamic severity (from DB-computed JSON — not hardcoded)
         self.severity_model    = {}
-        self.base_frequency    = 0.6885   # overwritten by _load()
+        self.base_frequency: float = 0.0   # populated by _load() from severity_model.json or DB
         # Real SHAP engine
         self.shap_engine       = None
 
@@ -89,13 +89,13 @@ class MotorInsurancePremiumEngine:
             with open(sev_path) as f:
                 self.severity_model = json.load(f)
             ov = self.severity_model.get("overall", {})
-            self.expected_severity = ov.get("avg_severity", 725_796)
-            self.base_frequency    = ov.get("frequency", 0.6885)
+            self.expected_severity = float(ov["avg_severity"])
+            self.base_frequency    = float(ov["frequency"])
             print(f"Severity: freq={self.base_frequency:.4f} sev=Rs.{self.expected_severity:,.0f} "
                   f"pure_premium=Rs.{self.base_frequency*self.expected_severity:,.0f}")
         else:
-            self.base_frequency = 0.6885
-            print("WARNING: severity_model.json not found — using fallback severity")
+            # JSON missing — compute from DB directly so value is never hardcoded
+            self._compute_severity_from_db()
 
         # 3. Governance metadata
         meta_path = MODEL_DIR / "model_metadata.json"
@@ -168,6 +168,32 @@ class MotorInsurancePremiumEngine:
     # ─────────────────────────────────────────────────────────────────────────
     # STATUS
     # ─────────────────────────────────────────────────────────────────────────
+
+    def _compute_severity_from_db(self):
+        """
+        Compute frequency and severity directly from the live claims and policies tables.
+        Used as fallback when severity_model.json is unavailable.
+        No constants — values are always derived from DB at runtime.
+        """
+        try:
+            from backend.utils.database import get_connection
+            with get_connection() as conn:
+                row = conn.execute("""
+                    SELECT
+                        (SELECT COUNT(*) FROM claims WHERE claim_amount > 0) * 1.0
+                            / NULLIF((SELECT COUNT(*) FROM policies), 0)  AS frequency,
+                        (SELECT AVG(claim_amount)  FROM claims WHERE claim_amount > 0) AS avg_severity
+                """).fetchone()
+            freq, sev = row
+            self.base_frequency    = float(freq or 0.0)
+            self.expected_severity = float(sev  or 0.0)
+            print(f"Severity from DB: freq={self.base_frequency:.6f} "
+                  f"sev=Rs.{self.expected_severity:,.0f} "
+                  f"pure_premium=Rs.{self.base_frequency*self.expected_severity:,.0f}")
+        except Exception as exc:
+            self.base_frequency    = 0.0
+            self.expected_severity = 0.0
+            print(f"WARNING: severity DB query failed — {exc}")
 
     def is_ready(self):
         return self._ready
