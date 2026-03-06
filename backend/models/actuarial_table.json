@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "version": "2024-SL-Motor-v1",
+    "source": "Sri Lanka Insurance Regulatory Commission (IRCSL) 2024 Guidelines",
+    "effective_date": "2024-01-01",
+    "currency": "LKR",
+    "cover_type": "Comprehensive"
+  },
+  "base_rates": {
+    "Car":          0.030,
+    "SUV":          0.035,
+    "Van":          0.040,
+    "Dual Purpose": 0.032
+  },
+  "vehicle_age_loading": {
+    "0": 0.000,
+    "1": 0.002,
+    "2": 0.003,
+    "3": 0.005,
+    "4": 0.007,
+    "5": 0.010,
+    "6": 0.012,
+    "7": 0.015,
+    "8": 0.018,
+    "9": 0.020
+  },
+  "driver_age_loading": {
+    "16_25": 0.018,
+    "26_35": 0.000,
+    "36_50": -0.002,
+    "51_65": 0.003,
+    "66_plus": 0.010
+  },
+  "experience_discount": {
+    "0_2_years":   0.012,
+    "3_5_years":   0.000,
+    "6_10_years": -0.003,
+    "11_plus":    -0.006
+  },
+  "province_loading": {
+    "Western":       0.006,
+    "Southern":      0.003,
+    "Central":       0.000,
+    "Eastern":       0.000,
+    "Northern":      0.000,
+    "North Western": 0.000,
+    "North Central": -0.002,
+    "Uva":          -0.003,
+    "Sabaragamuwa": -0.002
+  },
+  "vehicle_condition_loading": {
+    "Excellent": -0.003,
+    "Good":       0.000,
+    "Fair":       0.006,
+    "Poor":       0.012
+  },
+  "engine_cc_loading": {
+    "0_1000":    -0.004,
+    "1001_1500":  0.000,
+    "1501_2000":  0.004,
+    "2001_2500":  0.007,
+    "2501_plus":  0.012
+  },
+  "ncb_scale": [0, 20, 25, 30, 40, 50],
+  "taxes": {
+    "stamp_duty": 0.010,
+    "vat":        0.080,
+    "cess":       0.005
+  },
+  "min_premium_lkr": 15000,
+  "si_mv_ratio_cap":  1.10,
+  "blacklist_surcharge": 0.50,
+  "blend_actuarial_ml": {
+    "actuarial_weight": 0.35,
+    "ml_weight":        0.65
+  }
+}
