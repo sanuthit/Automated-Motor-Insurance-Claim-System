@@ -344,7 +344,19 @@ export default function Renewal() {
           <div style={{ marginTop: 10, color: "#2563eb", fontSize: 13 }}>⏳ Loading policy details…</div>
         )}
         {fetchErr && (
-          <p style={{ color: "#dc2626", fontSize: 12, marginTop: 8 }}>⚠ {fetchErr}</p>
+          <div style={{ marginTop: 12, padding: "14px 16px", borderRadius: 10,
+            background: fetchErr.includes("not available yet") ? "#fffbeb" : "#fef2f2",
+            border: `1px solid ${fetchErr.includes("not available yet") ? "#fde047" : "#fca5a5"}`,
+            fontSize: 13,
+            color: fetchErr.includes("not available yet") ? "#92400e" : "#dc2626" }}>
+            {fetchErr.includes("not available yet")
+              ? <><span style={{ fontWeight: 700, display: "block", marginBottom: 4 }}>
+                  🔒 Renewal Not Available Yet
+                </span>
+                {fetchErr}</>
+              : <><span>⚠ </span>{fetchErr}</>
+            }
+          </div>
         )}
       </div>
 
@@ -483,7 +495,9 @@ export default function Renewal() {
               </div>
             </div>
             <div style={{ marginTop: 12, padding: "10px 14px", background: "#f8fafc", borderRadius: 8, fontSize: 12, color: "#64748b" }}>
-              <strong>Renewal period:</strong> Today → {new Date(Date.now() + 365 * 86400000).toLocaleDateString("en-LK")}
+              <strong>Policy Expiry:</strong> {policy.policy_end_date || "—"}
+              {" | "}
+              <strong>New Period:</strong> Today → {new Date(Date.now() + 365 * 86400000).toLocaleDateString("en-LK")}
               {" | "}
               <strong>Loading:</strong> {approvedCount === 0 ? "None (no claims)" : approvedCount === 1 ? "15–35% surcharge" : "50–80% surcharge"}
             </div>
@@ -594,7 +608,7 @@ export default function Renewal() {
                 boxShadow: "0 1px 4px rgba(0,0,0,.06)" }}>
                 <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9",
                   display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>🤖 AI Risk Assessment</span>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>🤖 AI Renewal Risk Assessment</span>
                   {result.risk_label && (
                     <span style={{
                       padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700,

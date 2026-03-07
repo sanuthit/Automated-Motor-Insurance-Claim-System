@@ -35,6 +35,36 @@ async def fetch_renewal_details(policy_id: str):
     if not policy:
         raise HTTPException(404, detail=f"Policy '{policy_id}' not found in database")
 
+    # ── Renewal availability: only open from 11 months after issue/last renewal ──
+    from datetime import date as _date
+    today_d = _date.today()
+
+    # Prefer policy_end_date; fall back to registration_date + 365
+    end_date_str   = (policy.get("policy_end_date") or "").strip()
+    start_date_str = (policy.get("policy_start_date") or
+                      policy.get("registration_date") or "").strip()
+
+    if end_date_str:
+        policy_end = _date.fromisoformat(end_date_str)
+    elif start_date_str:
+        policy_end = _date.fromisoformat(start_date_str[:10]) + __import__("datetime").timedelta(days=365)
+    else:
+        policy_end = today_d  # unknown — allow renewal
+
+    # Renewal window: opens 30 days before expiry (= 11 months after start)
+    renewal_open  = policy_end - __import__("datetime").timedelta(days=30)
+    days_to_open  = (renewal_open - today_d).days
+    days_to_expiry = (policy_end - today_d).days
+
+    if today_d < renewal_open:
+        raise HTTPException(400, detail=(
+            f"Renewal not available yet. "
+            f"Policy expires on {policy_end}. "
+            f"Renewal window opens on {renewal_open} "
+            f"({days_to_open} days from today). "
+            f"You can renew from 30 days before expiry."
+        ))
+
     claims    = get_policy_claims(policy_id)
     last_renew = get_latest_renewal(policy_id)
     bl_status  = check_blacklist(nic=policy["nic"], policy_id=policy_id)
@@ -105,6 +135,12 @@ async def fetch_renewal_details(policy_id: str):
             "proposed_sum_insured": policy["market_value"] * 0.95,  # 95% of current MV
             "current_market_value": policy["market_value"],
             "years_with_company":   last_renew["years_with_company"] + 1 if last_renew else 1,
+        },
+        "renewal_window": {
+            "policy_end_date":   policy_end.isoformat(),
+            "renewal_open_date": renewal_open.isoformat(),
+            "days_to_expiry":    days_to_expiry,
+            "is_open":           True,   # always True here (blocked above if not open)
         },
         "blacklist": bl_status,
     }

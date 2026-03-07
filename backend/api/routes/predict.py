@@ -471,6 +471,29 @@ async def issue_policy(req: dict):
                     except Exception:
                         pass
 
+            # ── One email per NIC: look up existing email for this NIC ─────
+            req_email = (req.get("email") or "").strip()
+            req_nic   = (req.get("nic") or "").strip().upper()
+            if req_nic:
+                existing_email_row = conn.execute(
+                    "SELECT email FROM policies WHERE nic=? AND email != '' AND email IS NOT NULL LIMIT 1",
+                    (req_nic,)
+                ).fetchone()
+                if existing_email_row:
+                    # NIC already has a registered email — enforce it
+                    stored_email = existing_email_row[0].strip()
+                    if req_email and req_email != stored_email:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"This NIC ({req_nic}) already has a registered email address "
+                                f"({stored_email}). Each customer (NIC) can only have one email. "
+                                f"Please use the same email address."
+                            )
+                        )
+                    # Use stored email (auto-populate even if user left it blank)
+                    req_email = stored_email
+
             vehicle_year = int(req.get("vehicle_year", today.year))
             vehicle_age  = max(0, today.year - vehicle_year)
             yn = lambda k: "Yes" if req.get(k) else "No"
@@ -518,7 +541,7 @@ async def issue_policy(req: dict):
                 int(req.get("risk_score", 50)),   float(req.get("gross_premium", 0)),
                 "Active",
                 req.get("telephone", ""),          req.get("address", ""),
-                req.get("email", ""),              req.get("vat_no", ""),
+                req_email,                         req.get("vat_no", ""),
                 req.get("business_reg_no", ""),
                 yn("auto_association_member"),     int(req.get("accident_last_3yrs", 0)),
                 req.get("garaged_address", ""),    req.get("used_for", "Domestic and private purpose"),
@@ -549,7 +572,7 @@ async def issue_policy(req: dict):
             from backend.services.email_service import send_policy_email
             shap_drivers = (req.get("explanation") or {}).get("top_drivers", [])
             email_result = send_policy_email(
-                email         = req.get("email", ""),
+                email         = req_email,
                 customer_name = req.get("customer_name", ""),
                 policy_id     = policy_id,
                 vehicle_model = req.get("vehicle_model", ""),

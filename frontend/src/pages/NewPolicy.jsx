@@ -426,7 +426,8 @@ export default function NewPolicy() {
               <input value={form.nic} onChange={e => set("nic", e.target.value.toUpperCase())} placeholder="901234567V or 199012345678" style={inp(errs.nic)} />
             </Field>
 
-            <Field label="Customer Email Address" hint="Policy confirmation with premium breakdown and AI risk report will be sent here">
+            <Field label="Customer Email Address"
+              hint="One email per customer (NIC). Confirmation with premium breakdown and AI risk report will be sent here. If this NIC already has a registered email, it will be enforced automatically.">
               <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="customer@example.com" style={inp()} />
             </Field>
 
