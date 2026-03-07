@@ -1,22 +1,20 @@
 {
   "_meta": {
-    "computed_from": "claims table \u2014 dynamic (not hardcoded)",
-    "n_claims": 33215,
-    "n_policies": 48244,
-    "source": "insurance.db / claims"
+    "description": "Frequency-Severity actuarial model \u2014 both components computed from insurance.db at generation time",
+    "generation_method": "SQL aggregation on live claims and policies tables",
+    "generated_at": "2026-03-05T17:50:13.468744",
+    "source_table_claims": "claims (WHERE claim_amount > 0)",
+    "source_table_policies": "policies",
+    "no_hardcoded_values": true
   },
   "overall": {
+    "n_policies": 48244,
+    "n_claims": 33215,
     "frequency": 0.688479,
     "avg_severity": 725796.06,
-    "pure_premium": 499695.64,
-    "n_claims": 33215,
-    "n_policies": 48244
+    "pure_premium": 499695.64
   },
   "by_driver_age": {
-    "Under25": {
-      "n": 6768,
-      "avg_severity": 745220.64
-    },
     "25-34": {
       "n": 9827,
       "avg_severity": 709291.79
@@ -32,6 +30,10 @@
     "65plus": {
       "n": 195,
       "avg_severity": 634365.95
+    },
+    "Under25": {
+      "n": 6768,
+      "avg_severity": 745220.64
     }
   },
   "by_province": {

@@ -27,7 +27,7 @@ const GENDERS = ["Male", "Female"]; // Other removed
 const VEHICLE_TYPES_FALLBACK = ["Car", "SUV", "Van", "Dual Purpose"]; // Motor Cycle removed
 
 const DEFAULT_FORM = {
-  customer_name: "", nic: "", gender: "Male", occupation: "Employed",
+  customer_name: "", nic: "", email: "", gender: "Male", occupation: "Employed",
   driver_age: "", years_exp: "", province: "Western",
   vehicle_model: "", vehicle_year: "", engine_cc: "", vehicle_type: "Car",
   vehicle_condition: "Good", market_value: "", sum_insured: "",
@@ -345,7 +345,7 @@ export default function NewPolicy() {
     if (!result || issuing) return;
     setIssuing(true);
     try {
-      const res = await insuranceAPI.issuePolicy({ ...form, ...result });
+      const res = await insuranceAPI.issuePolicy({ ...form, ...result, email: form.email });
       setIssued(res.data);
     } catch (err) {
       setApiErr("Issue Policy error: " + safe(err));
@@ -424,6 +424,10 @@ export default function NewPolicy() {
 
             <Field label="NIC Number *" error={errs.nic}>
               <input value={form.nic} onChange={e => set("nic", e.target.value.toUpperCase())} placeholder="901234567V or 199012345678" style={inp(errs.nic)} />
+            </Field>
+
+            <Field label="Customer Email Address" hint="Policy confirmation with premium breakdown and AI risk report will be sent here">
+              <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="customer@example.com" style={inp()} />
             </Field>
 
             <Field label="Gender">
@@ -763,6 +767,23 @@ export default function NewPolicy() {
                   <strong>Policy ID:</strong> {issued.policy_id}<br />
                   <strong>Valid:</strong> {issued.start_date} → {issued.end_date}
                 </div>
+                {/* Email notification status */}
+                {issued.email && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8,
+                    background: issued.email.sent ? "#dcfce7" : "#fef9c3",
+                    border: `1px solid ${issued.email.sent ? "#86efac" : "#fde047"}`,
+                    fontSize: 12, color: issued.email.sent ? "#166534" : "#854d0e",
+                    display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 16 }}>{issued.email.sent ? "📧" : "📭"}</span>
+                    <span>
+                      {issued.email.sent
+                        ? `Confirmation email sent to ${form.email}`
+                        : form.email
+                          ? `Email not sent: ${issued.email.error || "check Gmail config"}`
+                          : "Add an email address to receive the policy confirmation report"}
+                    </span>
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     setStep(0);

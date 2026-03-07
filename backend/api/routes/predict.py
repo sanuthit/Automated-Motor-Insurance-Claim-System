@@ -8,6 +8,63 @@ from datetime import date
 
 router = APIRouter()
 
+def _attempt_shap_init(engine) -> bool:
+    """
+    Re-attempt SHAP engine initialisation if background file was missing at startup.
+    Generates a fresh background from the DB and re-initialises the engine.
+    Returns True if successful.
+    """
+    try:
+        import numpy as np
+        import sqlite3
+        from pathlib import Path
+        from backend.utils.shap_engine import SHAPEngine
+
+        bg_path = Path(__file__).resolve().parents[2] / "models" / "shap_background.npy"
+        db_path = Path(__file__).resolve().parents[2] / "insurance.db"
+
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute("""
+            SELECT driver_age, years_exp, engine_cc, vehicle_age, ncb_pct,
+                   gender, vehicle_type, occupation, province, vehicle_condition
+            FROM policies ORDER BY RANDOM() LIMIT 50
+        """).fetchall()
+        conn.close()
+
+        enc = engine.risk_encoders
+        def encode(col, val):
+            le = enc.get(col) if isinstance(enc, dict) else None
+            if le is None: return 0
+            try: return int(le.transform([str(val)])[0])
+            except: return 0
+
+        bg_rows = []
+        for r in rows:
+            age,exp,cc,va,ncb,gnd,vt,occ,prov,cond = r
+            age=float(age or 35); exp=float(exp or 5)
+            cc=float(cc or 1500); va=float(va or 5); ncb=float(ncb or 0)
+            bg_rows.append([
+                age, exp, exp/max(1,age-16), age*exp,
+                1 if age<25 else 0, 1 if age>65 else 0,
+                1 if exp<2  else 0, 1 if exp>15 else 0,
+                cc, va, cc*va, 1 if cc>2500 else 0, 1 if va>10 else 0,
+                ncb, 1 if ncb>=30 else 0,
+                encode("Gender", gnd or "Male"),
+                encode("Vehicle_Type", vt or "Car"),
+                encode("Occupation", occ or "Other"),
+                encode("Province", prov or "Western"),
+                encode("Vehicle_Condition", cond or "Good"),
+            ])
+
+        bg = np.array(bg_rows)
+        np.save(str(bg_path), bg)
+        engine.shap_engine = SHAPEngine(engine.risk_pipeline, engine.risk_features)
+        print(f"[SHAP] Background regenerated ({len(bg_rows)} samples) — engine ready")
+        return True
+    except Exception as exc:
+        print(f"[SHAP] Background regeneration failed: {exc}")
+        return False
+
 
 @router.post("/predict/premium")
 async def predict_premium(req: PolicyRequest):
@@ -69,28 +126,43 @@ async def predict_premium(req: PolicyRequest):
     result.setdefault("ncb_pct", float(req.prev_ncb))
     result.setdefault("breakdown", {})
 
-    # Always compute REAL SHAP values using the interventional engine
-    # Falls back to rule-based only if SHAP engine not yet ready (first boot)
-    shap_result = None
+    # Compute real interventional SHAP values.
+    # shap_engine is initialised at startup in engine._load() — ready within milliseconds.
+    # If unavailable (e.g. shap_background.npy missing on first deploy), re-generate it.
     shap_engine = getattr(engine, "shap_engine", None)
+
     if shap_engine and shap_engine.is_ready():
         try:
-            # Build numpy array in exact training feature order
-            inst_vec = engine._build_row(engine._risk_features_dict(proposal), engine.risk_features)
-            shap_result = shap_engine.compute(inst_vec)
-        except Exception as _se:
-            print(f"SHAP compute error: {_se}")
-
-    if shap_result and shap_result.get("available"):
-        result["explanation"] = shap_result
+            inst_vec = engine._build_row(
+                engine._risk_features_dict(proposal), engine.risk_features
+            )
+            result["explanation"] = shap_engine.compute(inst_vec)
+        except Exception as _shap_err:
+            # Compute failed — log and surface the error; never silently hide it
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[SHAP ERROR] {_shap_err}\n{tb}")
+            result["explanation"] = {
+                "available": False,
+                "is_ml_shap": False,
+                "error": str(_shap_err),
+                "note": "SHAP compute raised an exception — see server log",
+            }
     else:
-        # Genuine fallback (SHAP background not loaded yet)
-        result["explanation"] = {
-            "available": True,
-            "is_ml_shap": False,
-            "note": "Rule-based attribution (SHAP background initialising)",
-            "top_drivers": _build_shap_reasons(proposal, result.get("risk_score", 50)),
-        }
+        # Background file missing — attempt to regenerate it on-the-fly
+        _bg_path = engine.risk_pipeline and _attempt_shap_init(engine)
+        shap_engine = getattr(engine, "shap_engine", None)
+        if shap_engine and shap_engine.is_ready():
+            inst_vec = engine._build_row(
+                engine._risk_features_dict(proposal), engine.risk_features
+            )
+            result["explanation"] = shap_engine.compute(inst_vec)
+        else:
+            result["explanation"] = {
+                "available": False,
+                "is_ml_shap": False,
+                "note": "SHAP background not initialised — run generate_shap_background.py",
+            }
 
     return result
 
@@ -471,12 +543,39 @@ async def issue_policy(req: dict):
             )
             conn.commit()
 
+        # ── Email notification (non-blocking) ──────────────────────────
+        email_result = {"sent": False, "error": "not attempted"}
+        try:
+            from backend.services.email_service import send_policy_email
+            shap_drivers = (req.get("explanation") or {}).get("top_drivers", [])
+            email_result = send_policy_email(
+                email         = req.get("email", ""),
+                customer_name = req.get("customer_name", ""),
+                policy_id     = policy_id,
+                vehicle_model = req.get("vehicle_model", ""),
+                vehicle_type  = req.get("vehicle_type", "Car"),
+                gross_premium = float(req.get("gross_premium", 0)),
+                net_premium   = float(req.get("net_premium", 0)),
+                stamp_duty    = float(req.get("stamp_duty", 0)),
+                vat           = float(req.get("vat", 0)),
+                cess          = float(req.get("cess", 0)),
+                risk_score    = req.get("risk_score"),
+                ncb_pct       = float(req.get("prev_ncb", 0)),
+                start_date    = today.isoformat(),
+                end_date      = end_date.isoformat(),
+                shap_drivers  = shap_drivers,
+            )
+        except Exception as _email_err:
+            email_result = {"sent": False, "error": str(_email_err)}
+            print(f"[Email] policy notification error: {_email_err}")
+
         return {
             "success":    True,
             "policy_id":  policy_id,
             "start_date": today.isoformat(),
             "end_date":   end_date.isoformat(),
             "message":    f"Policy {policy_id} issued. Valid {today} to {end_date}.",
+            "email":      email_result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to issue policy: {str(e)}")
