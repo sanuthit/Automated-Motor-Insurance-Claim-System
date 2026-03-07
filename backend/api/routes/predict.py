@@ -543,12 +543,39 @@ async def issue_policy(req: dict):
             )
             conn.commit()
 
+        # ── Email notification (non-blocking) ──────────────────────────
+        email_result = {"sent": False, "error": "not attempted"}
+        try:
+            from backend.services.email_service import send_policy_email
+            shap_drivers = (req.get("explanation") or {}).get("top_drivers", [])
+            email_result = send_policy_email(
+                email         = req.get("email", ""),
+                customer_name = req.get("customer_name", ""),
+                policy_id     = policy_id,
+                vehicle_model = req.get("vehicle_model", ""),
+                vehicle_type  = req.get("vehicle_type", "Car"),
+                gross_premium = float(req.get("gross_premium", 0)),
+                net_premium   = float(req.get("net_premium", 0)),
+                stamp_duty    = float(req.get("stamp_duty", 0)),
+                vat           = float(req.get("vat", 0)),
+                cess          = float(req.get("cess", 0)),
+                risk_score    = req.get("risk_score"),
+                ncb_pct       = float(req.get("prev_ncb", 0)),
+                start_date    = today.isoformat(),
+                end_date      = end_date.isoformat(),
+                shap_drivers  = shap_drivers,
+            )
+        except Exception as _email_err:
+            email_result = {"sent": False, "error": str(_email_err)}
+            print(f"[Email] policy notification error: {_email_err}")
+
         return {
             "success":    True,
             "policy_id":  policy_id,
             "start_date": today.isoformat(),
             "end_date":   end_date.isoformat(),
             "message":    f"Policy {policy_id} issued. Valid {today} to {end_date}.",
+            "email":      email_result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to issue policy: {str(e)}")

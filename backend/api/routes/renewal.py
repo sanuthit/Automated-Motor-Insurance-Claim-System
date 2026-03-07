@@ -413,6 +413,33 @@ async def process_renewal(req: RenewalProcessRequest):
             ))
             conn.commit()
 
+        # ── Email notification (non-blocking) ──────────────────────────
+        email_result = {"sent": False, "error": "not attempted"}
+        try:
+            from backend.services.email_service import send_renewal_email
+            prev_prem = float(policy.get("calculated_premium", req.renewal_premium))
+            email_result = send_renewal_email(
+                email            = policy.get("email", ""),
+                customer_name    = policy.get("customer_name", ""),
+                policy_id        = req.policy_id,
+                renewal_id       = renewal_id,
+                vehicle_model    = policy.get("vehicle_model", ""),
+                renewal_premium  = float(req.renewal_premium),
+                previous_premium = prev_prem,
+                pct_change       = round(
+                    (float(req.renewal_premium) - prev_prem) / max(1, prev_prem) * 100, 1
+                ),
+                new_ncb          = float(req.new_ncb),
+                risk_score       = policy.get("risk_score"),
+                risk_label       = policy.get("risk_label", ""),
+                start_date       = today.isoformat(),
+                end_date         = end_date.isoformat(),
+                recommendation   = "APPROVE",
+            )
+        except Exception as _email_err:
+            email_result = {"sent": False, "error": str(_email_err)}
+            print(f"[Email] renewal notification error: {_email_err}")
+
         return {
             "success":    True,
             "policy_id":  req.policy_id,
@@ -420,6 +447,7 @@ async def process_renewal(req: RenewalProcessRequest):
             "start_date": today.isoformat(),
             "end_date":   end_date.isoformat(),
             "message":    f"Policy {req.policy_id} renewed. Valid {today} → {end_date}.",
+            "email":      email_result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Renewal failed: {str(e)}")

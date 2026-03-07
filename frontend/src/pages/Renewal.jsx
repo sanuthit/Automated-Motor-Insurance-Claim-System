@@ -568,6 +568,22 @@ export default function Renewal() {
                         <strong>Renewal ID:</strong> {renewed.renewal_id}<br />
                         <strong>Valid:</strong> {renewed.start_date} → {renewed.end_date}
                       </div>
+                      {renewed.email && (
+                        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8,
+                          background: renewed.email.sent ? "#dcfce7" : "#fef9c3",
+                          border: `1px solid ${renewed.email.sent ? "#86efac" : "#fde047"}`,
+                          fontSize: 12, color: renewed.email.sent ? "#166534" : "#854d0e",
+                          display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 16 }}>{renewed.email.sent ? "📧" : "📭"}</span>
+                          <span>
+                            {renewed.email.sent
+                              ? `Confirmation email sent to ${policy?.email || "customer"}`
+                              : policy?.email
+                                ? `Email not sent: ${renewed.email.error || "check Gmail config"}`
+                                : "No email on file — enter customer email when registering policy"}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
