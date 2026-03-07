@@ -27,7 +27,7 @@ const GENDERS = ["Male", "Female"]; // Other removed
 const VEHICLE_TYPES_FALLBACK = ["Car", "SUV", "Van", "Dual Purpose"]; // Motor Cycle removed
 
 const DEFAULT_FORM = {
-  customer_name: "", nic: "", email: "", gender: "Male", occupation: "Employed",
+  first_name: "", last_name: "", nic: "", email: "", gender: "Male", occupation: "Employed",
   driver_age: "", years_exp: "", province: "Western",
   vehicle_model: "", vehicle_year: "", engine_cc: "", vehicle_type: "Car",
   vehicle_condition: "Good", market_value: "", sum_insured: "",
@@ -224,13 +224,16 @@ export default function NewPolicy() {
   };
 
   // ── Validation Step 0 ────────────────────────────────────────────────────────
-  const goNext = () => {
+  const goNext = async () => {
     const e = {};
-    if (!form.customer_name.trim() || form.customer_name.trim().length < 2)
-      e.customer_name = "Full name required (min 2 characters)";
-
     if (!form.nic.trim() || !/^(\d{9}[VvXx]|\d{12})$/.test(form.nic.trim()))
-      e.nic = "Invalid NIC — use 901234567V or 199012345678";
+      e.nic = "Invalid NIC — use 9-digit format: 901234567V or 12-digit: 199012345678";
+    if (!form.email.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(form.email.trim()))
+      e.email = "Valid email address is required";
+    if (!form.first_name.trim() || form.first_name.trim().length < 2)
+      e.first_name = "First name required";
+    if (!form.last_name.trim() || form.last_name.trim().length < 2)
+      e.last_name = "Last name required";
 
     const age = Number(form.driver_age);
     if (!form.driver_age || age < 18 || age > 80)
@@ -243,6 +246,43 @@ export default function NewPolicy() {
       e.years_exp = `Maximum ${age - 16} years for age ${age}`;
 
     if (Object.keys(e).length) { setErrs(e); return; }
+
+    // Check name uniqueness and NIC active policy before proceeding to step 2
+    if (form.first_name.trim() && form.last_name.trim()) {
+      try {
+        const fullName = `${form.first_name.trim()} ${form.last_name.trim()}`;
+        const res = await insuranceAPI.checkNameNic({
+          full_name: fullName,
+          nic: form.nic.trim().toUpperCase(),
+        });
+        if (res.data?.name_conflict) {
+          setErrs({ last_name: `The full name '${fullName}' is already registered under a different NIC` });
+          return;
+        }
+        if (res.data?.nic_conflict) {
+          setErrs({ nic: res.data.nic_message || "This NIC already has an active policy — please use Renewal" });
+          return;
+        }
+      } catch (err) {
+        const detail = err?.response?.data?.detail || err?.message || "";
+        if (detail.includes("already registered under a different NIC") || detail.includes("full name")) {
+          const fullName = `${form.first_name.trim()} ${form.last_name.trim()}`;
+          setErrs({ last_name: `The full name '${fullName}' is already registered under a different NIC. Please check the name or NIC.` });
+          return;
+        }
+        if (detail.includes("active policy") || detail.includes("Renewal page") || detail.includes("existing policy")) {
+          setErrs({ nic: detail });
+          return;
+        }
+        if (detail) {
+          // Any other server error — show on NIC field and stop
+          setErrs({ nic: `Check failed: ${detail}` });
+          return;
+        }
+        // Genuine network error (server down) — allow to proceed
+      }
+    }
+
     setErrs({});
     setStep(1);
   };
@@ -270,8 +310,6 @@ export default function NewPolicy() {
     else if (mv && si > mv * 1.20)
       e.sum_insured = `Cannot exceed 120% of market value (${fmt(mv * 1.20)})`;
 
-    if (Number(form.prev_ncb) > 0 && !form.valid_renewal_notice)
-      e.valid_renewal_notice = "Renewal notice required when NCB > 0";
 
     return e;
   };
@@ -302,7 +340,9 @@ export default function NewPolicy() {
     try {
       const yr = Number(form.vehicle_year);
       const payload = {
-        customer_name: form.customer_name.trim(),
+        first_name: form.first_name.trim(),
+        last_name:  form.last_name.trim(),
+        customer_name: `${form.first_name.trim()} ${form.last_name.trim()}`,
         nic: form.nic.trim().toUpperCase(),
         gender: form.gender,
         occupation: form.occupation,
@@ -345,7 +385,7 @@ export default function NewPolicy() {
     if (!result || issuing) return;
     setIssuing(true);
     try {
-      const res = await insuranceAPI.issuePolicy({ ...form, ...result, email: form.email });
+      const res = await insuranceAPI.issuePolicy({ ...form, ...result, email: form.email, first_name: form.first_name, last_name: form.last_name, customer_name: `${form.first_name.trim()} ${form.last_name.trim()}` });
       setIssued(res.data);
     } catch (err) {
       setApiErr("Issue Policy error: " + safe(err));
@@ -418,15 +458,20 @@ export default function NewPolicy() {
           <h3 style={{ margin: "0 0 20px", fontSize: 15, fontWeight: 700 }}>Customer Information</h3>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <Field label="Full Name *" error={errs.customer_name}>
-              <input value={form.customer_name} onChange={e => set("customer_name", e.target.value)} placeholder="Enter full name" style={inp(errs.customer_name)} />
+            <Field label="First Name *" error={errs.first_name}>
+              <input value={form.first_name} onChange={e => set("first_name", e.target.value)} placeholder="e.g. Kasun" style={inp(errs.first_name)} />
+            </Field>
+
+            <Field label="Last Name *" error={errs.last_name}>
+              <input value={form.last_name} onChange={e => set("last_name", e.target.value)} placeholder="e.g. Perera" style={inp(errs.last_name)} />
             </Field>
 
             <Field label="NIC Number *" error={errs.nic}>
               <input value={form.nic} onChange={e => set("nic", e.target.value.toUpperCase())} placeholder="901234567V or 199012345678" style={inp(errs.nic)} />
             </Field>
 
-            <Field label="Customer Email Address" hint="Policy confirmation with premium breakdown and AI risk report will be sent here">
+            <Field label="Customer Email Address *" error={errs.email}
+              hint="One email per customer (NIC). Confirmation email will be sent here. Required.">
               <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="customer@example.com" style={inp()} />
             </Field>
 
@@ -456,22 +501,10 @@ export default function NewPolicy() {
               </select>
             </Field>
 
-            <Field label="Previous NCB (%)">
-              <select value={form.prev_ncb} onChange={e => set("prev_ncb", Number(e.target.value))} style={inp()}>
-                {[0, 10, 20, 30, 40, 50].map(v => <option key={v} value={v}>{v}%</option>)}
-              </select>
-            </Field>
+
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, marginTop: 8 }}>
-            <input
-              type="checkbox"
-              checked={form.is_existing_customer}
-              onChange={e => set("is_existing_customer", e.target.checked)}
-              style={{ accentColor: "#2563eb", width: 16, height: 16 }}
-            />
-            <span style={{ fontWeight: 600, color: "#334155" }}>Existing customer</span>
-          </label>
+
 
           <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
             <button
@@ -699,7 +732,7 @@ export default function NewPolicy() {
 
             <div style={{ marginTop: 12 }}>
               {[
-                ["Customer", form.customer_name],
+                ["Customer", `${form.first_name} ${form.last_name}`],
                 ["Vehicle", `${form.vehicle_model} (${form.vehicle_year})`],
                 ["Sum Insured", fmt(form.sum_insured)],
                 ["Market Value", fmt(form.market_value)],

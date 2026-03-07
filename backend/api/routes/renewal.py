@@ -35,6 +35,36 @@ async def fetch_renewal_details(policy_id: str):
     if not policy:
         raise HTTPException(404, detail=f"Policy '{policy_id}' not found in database")
 
+    # ── Renewal availability: only open from 11 months after issue/last renewal ──
+    from datetime import date as _date
+    today_d = _date.today()
+
+    # Prefer policy_end_date; fall back to registration_date + 365
+    end_date_str   = (policy.get("policy_end_date") or "").strip()
+    start_date_str = (policy.get("policy_start_date") or
+                      policy.get("registration_date") or "").strip()
+
+    if end_date_str:
+        policy_end = _date.fromisoformat(end_date_str)
+    elif start_date_str:
+        policy_end = _date.fromisoformat(start_date_str[:10]) + __import__("datetime").timedelta(days=365)
+    else:
+        policy_end = today_d  # unknown — allow renewal
+
+    # Renewal window: opens 30 days before expiry (= 11 months after start)
+    renewal_open  = policy_end - __import__("datetime").timedelta(days=30)
+    days_to_open  = (renewal_open - today_d).days
+    days_to_expiry = (policy_end - today_d).days
+
+    if today_d < renewal_open:
+        raise HTTPException(400, detail=(
+            f"Renewal not available yet. "
+            f"Policy expires on {policy_end}. "
+            f"Renewal window opens on {renewal_open} "
+            f"({days_to_open} days from today). "
+            f"You can renew from 30 days before expiry."
+        ))
+
     claims    = get_policy_claims(policy_id)
     last_renew = get_latest_renewal(policy_id)
     bl_status  = check_blacklist(nic=policy["nic"], policy_id=policy_id)
@@ -105,6 +135,12 @@ async def fetch_renewal_details(policy_id: str):
             "proposed_sum_insured": policy["market_value"] * 0.95,  # 95% of current MV
             "current_market_value": policy["market_value"],
             "years_with_company":   last_renew["years_with_company"] + 1 if last_renew else 1,
+        },
+        "renewal_window": {
+            "policy_end_date":   policy_end.isoformat(),
+            "renewal_open_date": renewal_open.isoformat(),
+            "days_to_expiry":    days_to_expiry,
+            "is_open":           True,   # always True here (blocked above if not open)
         },
         "blacklist": bl_status,
     }
@@ -264,6 +300,74 @@ async def calculate_renewal(req: RenewalCalcRequest):
             else:
                 explanation = {"available": False, "is_ml_shap": False,
                                "note": "SHAP background not loaded"}
+
+            # ── Step 3: prepend renewal-specific claim drivers ─────────────
+            # These factors are critical for renewal risk but not in the base
+            # ML feature set, so we inject them as contextual SHAP-equivalent
+            # drivers at the top of the explanation list.
+            if explanation.get("available"):
+                renewal_drivers = []
+
+                if number_of_claims == 0:
+                    renewal_drivers.append({
+                        "feature": "Claim History",
+                        "shap_value": -0.045,
+                        "direction": "reduces_risk",
+                        "magnitude": "high",
+                        "reason": "No claims in policy period — strong positive signal",
+                    })
+                elif number_of_claims == 1:
+                    mag = "high" if highest_claim > 1_000_000 else "medium"
+                    renewal_drivers.append({
+                        "feature": "Claim History",
+                        "shap_value": +0.038,
+                        "direction": "increases_risk",
+                        "magnitude": mag,
+                        "reason": f"1 claim — LKR {int(highest_claim):,} (15–35% loading applied)",
+                    })
+                else:
+                    renewal_drivers.append({
+                        "feature": "Claim Frequency",
+                        "shap_value": +0.055 + (number_of_claims - 2) * 0.012,
+                        "direction": "increases_risk",
+                        "magnitude": "high",
+                        "reason": f"{number_of_claims} claims — LKR {int(total_claim_amount):,} total (heavy loading)",
+                    })
+
+                if total_claim_amount > 500_000:
+                    renewal_drivers.append({
+                        "feature": "Total Claim Amount",
+                        "shap_value": +0.030,
+                        "direction": "increases_risk",
+                        "magnitude": "medium" if total_claim_amount < 2_000_000 else "high",
+                        "reason": f"LKR {int(total_claim_amount):,} total exposure this period",
+                    })
+
+                if years_co >= 5 and number_of_claims == 0:
+                    renewal_drivers.append({
+                        "feature": "Customer Loyalty",
+                        "shap_value": -0.018,
+                        "direction": "reduces_risk",
+                        "magnitude": "low",
+                        "reason": f"{int(years_co)} years clean record — loyalty discount −3%",
+                    })
+                elif years_co >= 3:
+                    renewal_drivers.append({
+                        "feature": "Customer Loyalty",
+                        "shap_value": -0.009,
+                        "direction": "reduces_risk",
+                        "magnitude": "low",
+                        "reason": f"{int(years_co)} years with company",
+                    })
+
+                # Insert at top; remove any duplicate NCB driver from base SHAP
+                existing_drivers = [
+                    d for d in explanation.get("top_drivers", [])
+                    if d.get("feature", "").lower() not in
+                       ("claim history", "claim frequency", "total claim amount", "customer loyalty")
+                ]
+                explanation["top_drivers"] = renewal_drivers + existing_drivers[:5]
+                explanation["renewal_context"] = True
         else:
             risk_score  = 50
             risk_label  = "MEDIUM"
@@ -328,6 +432,7 @@ async def customer_blacklist_check(nic: str):
 # ── POST /renewal/process  — finalise renewal, update DB ─────────────────
 class RenewalProcessRequest(BaseModel):
     policy_id:            str
+    renewal_email:        str = ""
     renewal_premium:      float
     new_ncb:              float = 0.0
     proposed_sum_insured: float
@@ -411,6 +516,17 @@ async def process_renewal(req: RenewalProcessRequest):
                 req.new_ncb, req.renewal_premium,
                 "Renewed",
             ))
+            # Save renewal_email to policy if not already set
+            if req.renewal_email and not policy.get("email"):
+                try:
+                    conn.execute(
+                        "UPDATE policies SET email=? WHERE policy_id=?",
+                        (req.renewal_email.strip(), req.policy_id)
+                    )
+                    conn.commit()
+                    policy["email"] = req.renewal_email.strip()
+                except Exception:
+                    pass
             conn.commit()
 
         # ── Email notification (non-blocking) ──────────────────────────
@@ -418,8 +534,10 @@ async def process_renewal(req: RenewalProcessRequest):
         try:
             from backend.services.email_service import send_renewal_email
             prev_prem = float(policy.get("calculated_premium", req.renewal_premium))
+            # Use renewal_email if policy had no email
+            effective_email = policy.get("email") or req.renewal_email or ""
             email_result = send_renewal_email(
-                email            = policy.get("email", ""),
+                email            = effective_email,
                 customer_name    = policy.get("customer_name", ""),
                 policy_id        = req.policy_id,
                 renewal_id       = renewal_id,
