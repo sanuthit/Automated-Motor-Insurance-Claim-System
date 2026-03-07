@@ -71,6 +71,7 @@ export default function Claims() {
 
     const ca = Number(form.claim_amount_lkr);
     if (!form.claim_amount_lkr || ca <= 0) e.claim_amount_lkr = "Claim amount is required";
+    else if (ca < 1000) e.claim_amount_lkr = "Minimum claim amount is LKR 1,000";
     else if (iv && ca > iv) e.claim_amount_lkr = `Cannot exceed insured value (${fmt(iv)})`;
 
     const age = Number(form.driver_age);

@@ -432,6 +432,7 @@ async def customer_blacklist_check(nic: str):
 # ── POST /renewal/process  — finalise renewal, update DB ─────────────────
 class RenewalProcessRequest(BaseModel):
     policy_id:            str
+    renewal_email:        str = ""
     renewal_premium:      float
     new_ncb:              float = 0.0
     proposed_sum_insured: float
@@ -515,6 +516,17 @@ async def process_renewal(req: RenewalProcessRequest):
                 req.new_ncb, req.renewal_premium,
                 "Renewed",
             ))
+            # Save renewal_email to policy if not already set
+            if req.renewal_email and not policy.get("email"):
+                try:
+                    conn.execute(
+                        "UPDATE policies SET email=? WHERE policy_id=?",
+                        (req.renewal_email.strip(), req.policy_id)
+                    )
+                    conn.commit()
+                    policy["email"] = req.renewal_email.strip()
+                except Exception:
+                    pass
             conn.commit()
 
         # ── Email notification (non-blocking) ──────────────────────────
@@ -522,8 +534,10 @@ async def process_renewal(req: RenewalProcessRequest):
         try:
             from backend.services.email_service import send_renewal_email
             prev_prem = float(policy.get("calculated_premium", req.renewal_premium))
+            # Use renewal_email if policy had no email
+            effective_email = policy.get("email") or req.renewal_email or ""
             email_result = send_renewal_email(
-                email            = policy.get("email", ""),
+                email            = effective_email,
                 customer_name    = policy.get("customer_name", ""),
                 policy_id        = req.policy_id,
                 renewal_id       = renewal_id,

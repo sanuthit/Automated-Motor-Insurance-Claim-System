@@ -229,6 +229,8 @@ export default function Renewal() {
   const [renewLoading, setRenewLoading] = useState(false);
   const [renewErr, setRenewErr]         = useState("");
   const [renewed, setRenewed]           = useState(null);
+  const [renewalEmail, setRenewalEmail] = useState("");
+  const [emailErr, setEmailErr]         = useState("");
   const [selectedId, setSelectedId]     = useState("");
 
   const fetchPolicy = async (policyId) => {
@@ -306,6 +308,14 @@ export default function Renewal() {
 
   const renewPolicy = async () => {
     if (!result) return;
+    // If no email on policy, require one before renewing
+    if (!policy?.email) {
+      if (!renewalEmail.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(renewalEmail.trim())) {
+        setEmailErr("Please enter a valid email to receive the renewal confirmation.");
+        return;
+      }
+    }
+    setEmailErr("");
     setRenewLoading(true); setRenewErr(""); setRenewed(null);
     try {
       const res = await insuranceAPI.processRenewal({
@@ -313,6 +323,7 @@ export default function Renewal() {
         renewal_premium:      result.renewal_premium || result.gross_premium,
         new_ncb:              Number(result.new_ncb ?? newNCB),
         proposed_sum_insured: Number(newSI),
+        renewal_email:        policy?.email || renewalEmail.trim(),
       });
       setRenewed(res.data);
     } catch (e) {
@@ -551,18 +562,33 @@ export default function Renewal() {
                           : "#0f172a" }}>{v}</span>
                     </div>
                   ))}
-                  {result.risk_factors?.length > 0 && (
-                    <div style={{ marginTop: 12, padding: "10px 12px", background: "#f8fafc", borderRadius: 8 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Loading factors:</div>
-                      {result.risk_factors.map((f, i) => (
-                        <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 3 }}>• {f}</div>
-                      ))}
-                    </div>
-                  )}
+
 
                   {/* Renew button */}
                   {!renewed ? (
                     <div style={{ marginTop: 16 }}>
+                      {!policy?.email && (
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={{ fontSize: 12, fontWeight: 600, color: "#334155",
+                            display: "block", marginBottom: 5 }}>
+                            📧 Customer Email (required for confirmation)
+                          </label>
+                          <input
+                            type="email"
+                            value={renewalEmail}
+                            onChange={e => { setRenewalEmail(e.target.value); setEmailErr(""); }}
+                            placeholder="customer@example.com"
+                            style={{ width: "100%", padding: "9px 12px", borderRadius: 8, boxSizing: "border-box",
+                              border: `1px solid ${emailErr ? "#dc2626" : "#e2e8f0"}`, fontSize: 13 }}
+                          />
+                          {emailErr && (
+                            <p style={{ color: "#dc2626", fontSize: 11, marginTop: 3 }}>⚠ {emailErr}</p>
+                          )}
+                          <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>
+                            This email will be saved to the policy for future renewals.
+                          </p>
+                        </div>
+                      )}
                       <button onClick={renewPolicy} disabled={renewLoading}
                         style={{ width: "100%", padding: "13px 0", borderRadius: 8, border: "none",
                           background: renewLoading ? "#94a3b8" : "#16a34a", color: "#fff",

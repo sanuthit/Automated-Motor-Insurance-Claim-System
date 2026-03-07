@@ -224,13 +224,10 @@ export default function NewPolicy() {
   };
 
   // ── Validation Step 0 ────────────────────────────────────────────────────────
-  const goNext = () => {
+  const goNext = async () => {
     const e = {};
-    if (!form.customer_name.trim() || form.customer_name.trim().length < 2)
-      e.customer_name = "Full name required (min 2 characters)";
-
     if (!form.nic.trim() || !/^(\d{9}[VvXx]|\d{12})$/.test(form.nic.trim()))
-      e.nic = "Invalid NIC — use 901234567V or 199012345678";
+      e.nic = "Invalid NIC — use 9-digit format: 901234567V or 12-digit: 199012345678";
     if (!form.email.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(form.email.trim()))
       e.email = "Valid email address is required";
     if (!form.first_name.trim() || form.first_name.trim().length < 2)
@@ -249,6 +246,43 @@ export default function NewPolicy() {
       e.years_exp = `Maximum ${age - 16} years for age ${age}`;
 
     if (Object.keys(e).length) { setErrs(e); return; }
+
+    // Check name uniqueness and NIC active policy before proceeding to step 2
+    if (form.first_name.trim() && form.last_name.trim()) {
+      try {
+        const fullName = `${form.first_name.trim()} ${form.last_name.trim()}`;
+        const res = await insuranceAPI.checkNameNic({
+          full_name: fullName,
+          nic: form.nic.trim().toUpperCase(),
+        });
+        if (res.data?.name_conflict) {
+          setErrs({ last_name: `The full name '${fullName}' is already registered under a different NIC` });
+          return;
+        }
+        if (res.data?.nic_conflict) {
+          setErrs({ nic: res.data.nic_message || "This NIC already has an active policy — please use Renewal" });
+          return;
+        }
+      } catch (err) {
+        const detail = err?.response?.data?.detail || err?.message || "";
+        if (detail.includes("already registered under a different NIC") || detail.includes("full name")) {
+          const fullName = `${form.first_name.trim()} ${form.last_name.trim()}`;
+          setErrs({ last_name: `The full name '${fullName}' is already registered under a different NIC. Please check the name or NIC.` });
+          return;
+        }
+        if (detail.includes("active policy") || detail.includes("Renewal page") || detail.includes("existing policy")) {
+          setErrs({ nic: detail });
+          return;
+        }
+        if (detail) {
+          // Any other server error — show on NIC field and stop
+          setErrs({ nic: `Check failed: ${detail}` });
+          return;
+        }
+        // Genuine network error (server down) — allow to proceed
+      }
+    }
+
     setErrs({});
     setStep(1);
   };
@@ -276,8 +310,6 @@ export default function NewPolicy() {
     else if (mv && si > mv * 1.20)
       e.sum_insured = `Cannot exceed 120% of market value (${fmt(mv * 1.20)})`;
 
-    if (Number(form.prev_ncb) > 0 && !form.valid_renewal_notice)
-      e.valid_renewal_notice = "Renewal notice required when NCB > 0";
 
     return e;
   };
@@ -469,22 +501,10 @@ export default function NewPolicy() {
               </select>
             </Field>
 
-            <Field label="Previous NCB (%)">
-              <select value={form.prev_ncb} onChange={e => set("prev_ncb", Number(e.target.value))} style={inp()}>
-                {[0, 10, 20, 30, 40, 50].map(v => <option key={v} value={v}>{v}%</option>)}
-              </select>
-            </Field>
+
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, marginTop: 8 }}>
-            <input
-              type="checkbox"
-              checked={form.is_existing_customer}
-              onChange={e => set("is_existing_customer", e.target.checked)}
-              style={{ accentColor: "#2563eb", width: 16, height: 16 }}
-            />
-            <span style={{ fontWeight: 600, color: "#334155" }}>Existing customer</span>
-          </label>
+
 
           <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
             <button

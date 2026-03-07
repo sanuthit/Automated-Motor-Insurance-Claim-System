@@ -8,63 +8,6 @@ from datetime import date
 
 router = APIRouter()
 
-def _attempt_shap_init(engine) -> bool:
-    """
-    Re-attempt SHAP engine initialisation if background file was missing at startup.
-    Generates a fresh background from the DB and re-initialises the engine.
-    Returns True if successful.
-    """
-    try:
-        import numpy as np
-        import sqlite3
-        from pathlib import Path
-        from backend.utils.shap_engine import SHAPEngine
-
-        bg_path = Path(__file__).resolve().parents[2] / "models" / "shap_background.npy"
-        db_path = Path(__file__).resolve().parents[2] / "insurance.db"
-
-        conn = sqlite3.connect(str(db_path))
-        rows = conn.execute("""
-            SELECT driver_age, years_exp, engine_cc, vehicle_age, ncb_pct,
-                   gender, vehicle_type, occupation, province, vehicle_condition
-            FROM policies ORDER BY RANDOM() LIMIT 50
-        """).fetchall()
-        conn.close()
-
-        enc = engine.risk_encoders
-        def encode(col, val):
-            le = enc.get(col) if isinstance(enc, dict) else None
-            if le is None: return 0
-            try: return int(le.transform([str(val)])[0])
-            except: return 0
-
-        bg_rows = []
-        for r in rows:
-            age,exp,cc,va,ncb,gnd,vt,occ,prov,cond = r
-            age=float(age or 35); exp=float(exp or 5)
-            cc=float(cc or 1500); va=float(va or 5); ncb=float(ncb or 0)
-            bg_rows.append([
-                age, exp, exp/max(1,age-16), age*exp,
-                1 if age<25 else 0, 1 if age>65 else 0,
-                1 if exp<2  else 0, 1 if exp>15 else 0,
-                cc, va, cc*va, 1 if cc>2500 else 0, 1 if va>10 else 0,
-                ncb, 1 if ncb>=30 else 0,
-                encode("Gender", gnd or "Male"),
-                encode("Vehicle_Type", vt or "Car"),
-                encode("Occupation", occ or "Other"),
-                encode("Province", prov or "Western"),
-                encode("Vehicle_Condition", cond or "Good"),
-            ])
-
-        bg = np.array(bg_rows)
-        np.save(str(bg_path), bg)
-        engine.shap_engine = SHAPEngine(engine.risk_pipeline, engine.risk_features)
-        print(f"[SHAP] Background regenerated ({len(bg_rows)} samples) — engine ready")
-        return True
-    except Exception as exc:
-        print(f"[SHAP] Background regeneration failed: {exc}")
-        return False
-
 
 @router.post("/predict/premium")
 async def predict_premium(req: PolicyRequest):
@@ -104,14 +47,6 @@ async def predict_premium(req: PolicyRequest):
     else:
         try:
             result = engine.calculate(proposal)
-            # Engine doesn't return base_premium — compute it from net + NCB
-            if "base_premium" not in result:
-                net = result.get("net_premium", 0)
-                ncb_pct = float(proposal.get("prev_ncb", 0))
-                # Reverse: net = base * (1 - ncb/100), so base = net / (1 - ncb/100)
-                denom = (1 - ncb_pct / 100) if ncb_pct < 100 else 1
-                result["base_premium"]  = int(net / denom) if denom > 0 else int(net)
-                result["ncb_discount"]  = result["base_premium"] - int(net)
         except Exception as e:
             # Still return something useful rather than 500
             result = _deterministic_premium(proposal)
@@ -125,44 +60,14 @@ async def predict_premium(req: PolicyRequest):
     result.setdefault("doc_complete", True)
     result.setdefault("ncb_pct", float(req.prev_ncb))
     result.setdefault("breakdown", {})
+    result.setdefault("explanation", {"available": False})
 
-    # Compute real interventional SHAP values.
-    # shap_engine is initialised at startup in engine._load() — ready within milliseconds.
-    # If unavailable (e.g. shap_background.npy missing on first deploy), re-generate it.
-    shap_engine = getattr(engine, "shap_engine", None)
-
-    if shap_engine and shap_engine.is_ready():
+    # Try to add SHAP explanation
+    if engine.is_ready() and not result.get("explanation", {}).get("available"):
         try:
-            inst_vec = engine._build_row(
-                engine._risk_features_dict(proposal), engine.risk_features
-            )
-            result["explanation"] = shap_engine.compute(inst_vec)
-        except Exception as _shap_err:
-            # Compute failed — log and surface the error; never silently hide it
-            import traceback
-            tb = traceback.format_exc()
-            print(f"[SHAP ERROR] {_shap_err}\n{tb}")
-            result["explanation"] = {
-                "available": False,
-                "is_ml_shap": False,
-                "error": str(_shap_err),
-                "note": "SHAP compute raised an exception — see server log",
-            }
-    else:
-        # Background file missing — attempt to regenerate it on-the-fly
-        _bg_path = engine.risk_pipeline and _attempt_shap_init(engine)
-        shap_engine = getattr(engine, "shap_engine", None)
-        if shap_engine and shap_engine.is_ready():
-            inst_vec = engine._build_row(
-                engine._risk_features_dict(proposal), engine.risk_features
-            )
-            result["explanation"] = shap_engine.compute(inst_vec)
-        else:
-            result["explanation"] = {
-                "available": False,
-                "is_ml_shap": False,
-                "note": "SHAP background not initialised — run generate_shap_background.py",
-            }
+            result["explanation"] = engine.explain(proposal)
+        except Exception:
+            pass
 
     return result
 
@@ -273,8 +178,6 @@ def _deterministic_premium(p: dict) -> dict:
         },
         "explanation": {
             "available": True,
-            "is_ml_shap": False,
-            "note": "Rule-based fallback (ML models not yet loaded)",
             "top_drivers": _build_shap_reasons(p, risk),
         }
     }
@@ -471,109 +374,6 @@ async def issue_policy(req: dict):
                     except Exception:
                         pass
 
-            # ── Fix 1: Email is mandatory ─────────────────────────────────
-            req_email = (req.get("email") or "").strip()
-            if not req_email or "@" not in req_email:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Customer email address is required. Please enter a valid email."
-                )
-
-            # ── Fix 3 & 4: Block new policy for NIC with active policy ────
-            # Exception: allow if last policy/renewal is > 5 years old (lapsed)
-            req_nic = (req.get("nic") or "").strip().upper()
-            if req_nic:
-                from datetime import date as _dt, timedelta as _td
-                # Get most recent policy end date for this NIC
-                active_row = conn.execute("""
-                    SELECT policy_id, policy_end_date, registration_date, status
-                    FROM policies
-                    WHERE nic = ?
-                    ORDER BY rowid DESC LIMIT 1
-                """, (req_nic,)).fetchone()
-
-                if active_row:
-                    pid, end_str, reg_str, status = active_row
-                    # Determine most recent expiry
-                    date_str = (end_str or "").strip() or (reg_str or "").strip()
-                    if date_str:
-                        try:
-                            last_date = _dt.fromisoformat(date_str[:10])
-                            # If end_date is in future or recent past (<5 yrs) → block
-                            five_years_ago = _dt.today() - _td(days=5 * 365)
-                            if last_date >= five_years_ago:
-                                # Policy is active/recent — must renew, not re-register
-                                days_left = (last_date - _dt.today()).days
-                                if days_left >= 0:
-                                    raise HTTPException(
-                                        status_code=400,
-                                        detail=(
-                                            f"This NIC ({req_nic}) already has an active policy "
-                                            f"({pid}) valid until {last_date}. "
-                                            f"Please use the Renewal page to renew this policy."
-                                        )
-                                    )
-                                else:
-                                    # Expired but within 5 years → still must renew
-                                    raise HTTPException(
-                                        status_code=400,
-                                        detail=(
-                                            f"This NIC ({req_nic}) has an existing policy ({pid}) "
-                                            f"that expired on {last_date}. "
-                                            f"Please use the Renewal page. "
-                                            f"A new policy can only be registered if the last "
-                                            f"policy expired more than 5 years ago."
-                                        )
-                                    )
-                        except HTTPException:
-                            raise
-                        except Exception:
-                            pass  # If date parsing fails, allow registration
-
-            # ── One email per NIC: look up existing email for this NIC ─────
-            if req_nic:
-                existing_email_row = conn.execute(
-                    "SELECT email FROM policies WHERE nic=? AND email != '' AND email IS NOT NULL LIMIT 1",
-                    (req_nic,)
-                ).fetchone()
-                if existing_email_row:
-                    stored_email = existing_email_row[0].strip()
-                    if req_email != stored_email:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                f"This NIC ({req_nic}) already has a registered email address "
-                                f"({stored_email}). Each customer (NIC) can only have one email. "
-                                f"Please use the same email address."
-                            )
-                        )
-
-            # ── Fix 5: First + Last name uniqueness across NICs ──────────
-            first_name = (req.get("first_name") or "").strip()
-            last_name  = (req.get("last_name")  or "").strip()
-            if first_name and last_name:
-                # Build full customer_name from parts
-                customer_name_combined = f"{first_name} {last_name}"
-                # Check if exact same first+last already exists for a DIFFERENT NIC
-                dup_row = conn.execute("""
-                    SELECT nic FROM policies
-                    WHERE LOWER(customer_name) = LOWER(?)
-                      AND nic != ?
-                    LIMIT 1
-                """, (customer_name_combined, req_nic or "")).fetchone()
-                if dup_row:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"The full name '{first_name} {last_name}' is already registered "
-                            f"under a different NIC. Both first name and last name cannot be "
-                            f"identical to another customer. Please verify the name or NIC."
-                        )
-                    )
-            else:
-                # Fall back to customer_name as provided
-                customer_name_combined = (req.get("customer_name") or "").strip()
-
             vehicle_year = int(req.get("vehicle_year", today.year))
             vehicle_age  = max(0, today.year - vehicle_year)
             yn = lambda k: "Yes" if req.get(k) else "No"
@@ -603,7 +403,7 @@ async def issue_policy(req: dict):
             # 59 values — same order as col_list
             vals = (
                 policy_id,                        today.isoformat(),
-                customer_name_combined,            req.get("nic", ""),
+                req.get("customer_name", ""),     req.get("nic", ""),
                 int(req.get("driver_age", 30)),   req.get("gender", "Male"),
                 req.get("occupation", "Employed"),
                 int(req.get("years_exp", 0)),     req.get("province", "Western"),
@@ -621,7 +421,7 @@ async def issue_policy(req: dict):
                 int(req.get("risk_score", 50)),   float(req.get("gross_premium", 0)),
                 "Active",
                 req.get("telephone", ""),          req.get("address", ""),
-                req_email,                         req.get("vat_no", ""),
+                req.get("email", ""),              req.get("vat_no", ""),
                 req.get("business_reg_no", ""),
                 yn("auto_association_member"),     int(req.get("accident_last_3yrs", 0)),
                 req.get("garaged_address", ""),    req.get("used_for", "Domestic and private purpose"),
@@ -646,88 +446,81 @@ async def issue_policy(req: dict):
             )
             conn.commit()
 
-        # ── Email notification (non-blocking) ──────────────────────────
-        email_result = {"sent": False, "error": "not attempted"}
-        try:
-            from backend.services.email_service import send_policy_email
-            shap_drivers = (req.get("explanation") or {}).get("top_drivers", [])
-            email_result = send_policy_email(
-                email         = req_email,
-                customer_name = customer_name_combined,
-                policy_id     = policy_id,
-                vehicle_model = req.get("vehicle_model", ""),
-                vehicle_type  = req.get("vehicle_type", "Car"),
-                gross_premium = float(req.get("gross_premium", 0)),
-                net_premium   = float(req.get("net_premium", 0)),
-                stamp_duty    = float(req.get("stamp_duty", 0)),
-                vat           = float(req.get("vat", 0)),
-                cess          = float(req.get("cess", 0)),
-                risk_score    = req.get("risk_score"),
-                ncb_pct       = float(req.get("prev_ncb", 0)),
-                start_date    = today.isoformat(),
-                end_date      = end_date.isoformat(),
-                shap_drivers  = shap_drivers,
-            )
-        except Exception as _email_err:
-            email_result = {"sent": False, "error": str(_email_err)}
-            print(f"[Email] policy notification error: {_email_err}")
-
         return {
             "success":    True,
             "policy_id":  policy_id,
             "start_date": today.isoformat(),
             "end_date":   end_date.isoformat(),
             "message":    f"Policy {policy_id} issued. Valid {today} to {end_date}.",
-            "email":      email_result,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to issue policy: {str(e)}")
 
 
-@router.get("/policies/list")
-async def list_policies_for_dropdown(q: str = "", limit: int = 20):
+@router.post("/policy/check-name-nic")
+async def check_name_nic(req: dict):
     """
-    Return policy IDs + customer names for renewal dropdown search.
-    Supports server-side search via ?q= query param.
-    Default: most recent 20 policies. With query: searches all 48k records.
+    Pre-flight check before step 2 of new policy registration.
+    Validates: (1) full name uniqueness across NICs, (2) NIC has no active policy within 5 years.
+    Called on 'Next: Vehicle Info' click — returns conflicts without blocking the endpoint.
     """
     try:
         from backend.utils.database import get_connection
+        from datetime import date as _dt, timedelta as _td
+
+        full_name = (req.get("full_name") or "").strip()
+        nic       = (req.get("nic") or "").strip().upper()
+
+        name_conflict = False
+        nic_conflict  = False
+        nic_message   = ""
+
         with get_connection() as conn:
-            if q.strip():
-                # Server-side search across policy_id, customer_name, vehicle_model
-                search = f"%{q.strip().lower()}%"
-                rows = conn.execute("""
-                    SELECT policy_id, customer_name, vehicle_model, driver_age, province, status, ncb_pct
-                    FROM policies
-                    WHERE LOWER(policy_id) LIKE ?
-                       OR LOWER(customer_name) LIKE ?
-                       OR LOWER(vehicle_model) LIKE ?
-                    ORDER BY policy_id ASC
-                    LIMIT ?
-                """, (search, search, search, min(limit, 50))).fetchall()
-            else:
-                # No query — return most recent policies
-                rows = conn.execute("""
-                    SELECT policy_id, customer_name, vehicle_model, driver_age, province, status, ncb_pct
-                    FROM policies
-                    ORDER BY policy_id DESC
-                    LIMIT ?
-                """, (limit,)).fetchall()
+            # ── Name uniqueness: same first+last under a different NIC ────
+            if full_name and nic:
+                dup = conn.execute(
+                    "SELECT nic FROM policies WHERE LOWER(customer_name)=LOWER(?) AND nic!=? LIMIT 1",
+                    (full_name, nic)
+                ).fetchone()
+                name_conflict = dup is not None
+
+            # ── NIC active policy: block if last policy < 5 years old ─────
+            if nic:
+                row = conn.execute(
+                    "SELECT policy_id, policy_end_date, registration_date FROM policies "
+                    "WHERE nic=? ORDER BY rowid DESC LIMIT 1",
+                    (nic,)
+                ).fetchone()
+                if row:
+                    pid, end_str, reg_str = row
+                    date_str = (end_str or "").strip() or (reg_str or "").strip()
+                    if date_str:
+                        try:
+                            last_date    = _dt.fromisoformat(date_str[:10])
+                            five_yrs_ago = _dt.today() - _td(days=5 * 365)
+                            if last_date >= five_yrs_ago:
+                                nic_conflict = True
+                                days_left    = (last_date - _dt.today()).days
+                                if days_left >= 0:
+                                    nic_message = (
+                                        f"This NIC already has an active policy ({pid}) "
+                                        f"valid until {last_date}. Please use the Renewal page."
+                                    )
+                                else:
+                                    nic_message = (
+                                        f"This NIC has an existing policy ({pid}) that expired "
+                                        f"on {last_date}. Please use the Renewal page. "
+                                        f"New policy allowed only after 5-year lapse."
+                                    )
+                        except Exception:
+                            pass
+
         return {
-            "policies": [
-                {
-                    "policy_id":     r[0],
-                    "customer_name": r[1] or "",
-                    "vehicle_model": r[2] or "",
-                    "driver_age":    r[3],
-                    "province":      r[4] or "",
-                    "status":        r[5] or "Active",
-                    "ncb_pct":       r[6] or 0,
-                }
-                for r in rows
-            ],
-            "total": conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0] if not q.strip() else len(rows)
+            "name_conflict": name_conflict,
+            "nic_conflict":  nic_conflict,
+            "nic_message":   nic_message,
         }
+
     except Exception as e:
-        return {"policies": [], "error": str(e)}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Check failed: {str(e)}")

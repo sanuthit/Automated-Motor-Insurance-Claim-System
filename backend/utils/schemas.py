@@ -155,8 +155,8 @@ class ClaimRequest(BaseModel):
     insured_value:           int
     province:                Province = Province.WESTERN
     claim_type:              str
-    claim_amount_lkr:        Optional[int] = None
-    claim_amount:            Optional[int] = None
+    claim_amount_lkr:        Optional[int] = Field(default=None, ge=1000, description="Minimum LKR 1,000")
+    claim_amount:            Optional[int] = Field(default=None, ge=1000, description="Minimum LKR 1,000")
     driver_age:              int = Field(..., ge=18, le=80)
     vehicle_age:             Optional[int] = 5
     driver_license_years:    Optional[int] = 5

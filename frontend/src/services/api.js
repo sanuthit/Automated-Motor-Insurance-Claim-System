@@ -24,6 +24,7 @@ export const insuranceAPI = {
 
   registerPolicy: (data) => api.post('/policy/register', data),
   issuePolicy:    (data) => api.post('/policy/issue', data),
+  checkNameNic:   (data) => api.post('/policy/check-name-nic', data),
   getPolicy:      (id)   => api.get(`/policy/${id}`),
   listPolicies:   (skip=0, limit=20) => api.get(`/policies?skip=${skip}&limit=${limit}`),
 
