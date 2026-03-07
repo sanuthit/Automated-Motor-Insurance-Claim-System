@@ -27,7 +27,7 @@ const GENDERS = ["Male", "Female"]; // Other removed
 const VEHICLE_TYPES_FALLBACK = ["Car", "SUV", "Van", "Dual Purpose"]; // Motor Cycle removed
 
 const DEFAULT_FORM = {
-  customer_name: "", nic: "", email: "", gender: "Male", occupation: "Employed",
+  first_name: "", last_name: "", nic: "", email: "", gender: "Male", occupation: "Employed",
   driver_age: "", years_exp: "", province: "Western",
   vehicle_model: "", vehicle_year: "", engine_cc: "", vehicle_type: "Car",
   vehicle_condition: "Good", market_value: "", sum_insured: "",
@@ -231,6 +231,12 @@ export default function NewPolicy() {
 
     if (!form.nic.trim() || !/^(\d{9}[VvXx]|\d{12})$/.test(form.nic.trim()))
       e.nic = "Invalid NIC — use 901234567V or 199012345678";
+    if (!form.email.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(form.email.trim()))
+      e.email = "Valid email address is required";
+    if (!form.first_name.trim() || form.first_name.trim().length < 2)
+      e.first_name = "First name required";
+    if (!form.last_name.trim() || form.last_name.trim().length < 2)
+      e.last_name = "Last name required";
 
     const age = Number(form.driver_age);
     if (!form.driver_age || age < 18 || age > 80)
@@ -302,7 +308,9 @@ export default function NewPolicy() {
     try {
       const yr = Number(form.vehicle_year);
       const payload = {
-        customer_name: form.customer_name.trim(),
+        first_name: form.first_name.trim(),
+        last_name:  form.last_name.trim(),
+        customer_name: `${form.first_name.trim()} ${form.last_name.trim()}`,
         nic: form.nic.trim().toUpperCase(),
         gender: form.gender,
         occupation: form.occupation,
@@ -345,7 +353,7 @@ export default function NewPolicy() {
     if (!result || issuing) return;
     setIssuing(true);
     try {
-      const res = await insuranceAPI.issuePolicy({ ...form, ...result, email: form.email });
+      const res = await insuranceAPI.issuePolicy({ ...form, ...result, email: form.email, first_name: form.first_name, last_name: form.last_name, customer_name: `${form.first_name.trim()} ${form.last_name.trim()}` });
       setIssued(res.data);
     } catch (err) {
       setApiErr("Issue Policy error: " + safe(err));
@@ -418,16 +426,20 @@ export default function NewPolicy() {
           <h3 style={{ margin: "0 0 20px", fontSize: 15, fontWeight: 700 }}>Customer Information</h3>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <Field label="Full Name *" error={errs.customer_name}>
-              <input value={form.customer_name} onChange={e => set("customer_name", e.target.value)} placeholder="Enter full name" style={inp(errs.customer_name)} />
+            <Field label="First Name *" error={errs.first_name}>
+              <input value={form.first_name} onChange={e => set("first_name", e.target.value)} placeholder="e.g. Kasun" style={inp(errs.first_name)} />
+            </Field>
+
+            <Field label="Last Name *" error={errs.last_name}>
+              <input value={form.last_name} onChange={e => set("last_name", e.target.value)} placeholder="e.g. Perera" style={inp(errs.last_name)} />
             </Field>
 
             <Field label="NIC Number *" error={errs.nic}>
               <input value={form.nic} onChange={e => set("nic", e.target.value.toUpperCase())} placeholder="901234567V or 199012345678" style={inp(errs.nic)} />
             </Field>
 
-            <Field label="Customer Email Address"
-              hint="One email per customer (NIC). Confirmation with premium breakdown and AI risk report will be sent here. If this NIC already has a registered email, it will be enforced automatically.">
+            <Field label="Customer Email Address *" error={errs.email}
+              hint="One email per customer (NIC). Confirmation email will be sent here. Required.">
               <input type="email" value={form.email} onChange={e => set("email", e.target.value)} placeholder="customer@example.com" style={inp()} />
             </Field>
 
@@ -700,7 +712,7 @@ export default function NewPolicy() {
 
             <div style={{ marginTop: 12 }}>
               {[
-                ["Customer", form.customer_name],
+                ["Customer", `${form.first_name} ${form.last_name}`],
                 ["Vehicle", `${form.vehicle_model} (${form.vehicle_year})`],
                 ["Sum Insured", fmt(form.sum_insured)],
                 ["Market Value", fmt(form.market_value)],

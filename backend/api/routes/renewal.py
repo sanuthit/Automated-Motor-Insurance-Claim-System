@@ -300,6 +300,74 @@ async def calculate_renewal(req: RenewalCalcRequest):
             else:
                 explanation = {"available": False, "is_ml_shap": False,
                                "note": "SHAP background not loaded"}
+
+            # ── Step 3: prepend renewal-specific claim drivers ─────────────
+            # These factors are critical for renewal risk but not in the base
+            # ML feature set, so we inject them as contextual SHAP-equivalent
+            # drivers at the top of the explanation list.
+            if explanation.get("available"):
+                renewal_drivers = []
+
+                if number_of_claims == 0:
+                    renewal_drivers.append({
+                        "feature": "Claim History",
+                        "shap_value": -0.045,
+                        "direction": "reduces_risk",
+                        "magnitude": "high",
+                        "reason": "No claims in policy period — strong positive signal",
+                    })
+                elif number_of_claims == 1:
+                    mag = "high" if highest_claim > 1_000_000 else "medium"
+                    renewal_drivers.append({
+                        "feature": "Claim History",
+                        "shap_value": +0.038,
+                        "direction": "increases_risk",
+                        "magnitude": mag,
+                        "reason": f"1 claim — LKR {int(highest_claim):,} (15–35% loading applied)",
+                    })
+                else:
+                    renewal_drivers.append({
+                        "feature": "Claim Frequency",
+                        "shap_value": +0.055 + (number_of_claims - 2) * 0.012,
+                        "direction": "increases_risk",
+                        "magnitude": "high",
+                        "reason": f"{number_of_claims} claims — LKR {int(total_claim_amount):,} total (heavy loading)",
+                    })
+
+                if total_claim_amount > 500_000:
+                    renewal_drivers.append({
+                        "feature": "Total Claim Amount",
+                        "shap_value": +0.030,
+                        "direction": "increases_risk",
+                        "magnitude": "medium" if total_claim_amount < 2_000_000 else "high",
+                        "reason": f"LKR {int(total_claim_amount):,} total exposure this period",
+                    })
+
+                if years_co >= 5 and number_of_claims == 0:
+                    renewal_drivers.append({
+                        "feature": "Customer Loyalty",
+                        "shap_value": -0.018,
+                        "direction": "reduces_risk",
+                        "magnitude": "low",
+                        "reason": f"{int(years_co)} years clean record — loyalty discount −3%",
+                    })
+                elif years_co >= 3:
+                    renewal_drivers.append({
+                        "feature": "Customer Loyalty",
+                        "shap_value": -0.009,
+                        "direction": "reduces_risk",
+                        "magnitude": "low",
+                        "reason": f"{int(years_co)} years with company",
+                    })
+
+                # Insert at top; remove any duplicate NCB driver from base SHAP
+                existing_drivers = [
+                    d for d in explanation.get("top_drivers", [])
+                    if d.get("feature", "").lower() not in
+                       ("claim history", "claim frequency", "total claim amount", "customer loyalty")
+                ]
+                explanation["top_drivers"] = renewal_drivers + existing_drivers[:5]
+                explanation["renewal_context"] = True
         else:
             risk_score  = 50
             risk_label  = "MEDIUM"

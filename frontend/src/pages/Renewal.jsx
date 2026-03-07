@@ -37,8 +37,12 @@ function ShapPanel({ explanation }) {
   return (
     <div style={{ padding: "12px 16px", borderTop: "1px solid #f1f5f9" }}>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-        🧠 Why this risk score?
-        {explanation.is_ml_shap === false && (
+        🧠 {explanation.renewal_context ? "Renewal Risk Drivers" : "Why this risk score?"}
+        {explanation.renewal_context && (
+          <span style={{ fontSize: 10, background: "#dbeafe", color: "#1e40af",
+            padding: "2px 6px", borderRadius: 10, fontWeight: 600 }}>Claims + ML</span>
+        )}
+        {explanation.is_ml_shap === false && !explanation.renewal_context && (
           <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e",
             padding: "2px 6px", borderRadius: 10, fontWeight: 600 }}>Rule-based</span>
         )}

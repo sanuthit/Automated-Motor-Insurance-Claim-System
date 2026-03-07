@@ -471,18 +471,74 @@ async def issue_policy(req: dict):
                     except Exception:
                         pass
 
-            # ── One email per NIC: look up existing email for this NIC ─────
+            # ── Fix 1: Email is mandatory ─────────────────────────────────
             req_email = (req.get("email") or "").strip()
-            req_nic   = (req.get("nic") or "").strip().upper()
+            if not req_email or "@" not in req_email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Customer email address is required. Please enter a valid email."
+                )
+
+            # ── Fix 3 & 4: Block new policy for NIC with active policy ────
+            # Exception: allow if last policy/renewal is > 5 years old (lapsed)
+            req_nic = (req.get("nic") or "").strip().upper()
+            if req_nic:
+                from datetime import date as _dt, timedelta as _td
+                # Get most recent policy end date for this NIC
+                active_row = conn.execute("""
+                    SELECT policy_id, policy_end_date, registration_date, status
+                    FROM policies
+                    WHERE nic = ?
+                    ORDER BY rowid DESC LIMIT 1
+                """, (req_nic,)).fetchone()
+
+                if active_row:
+                    pid, end_str, reg_str, status = active_row
+                    # Determine most recent expiry
+                    date_str = (end_str or "").strip() or (reg_str or "").strip()
+                    if date_str:
+                        try:
+                            last_date = _dt.fromisoformat(date_str[:10])
+                            # If end_date is in future or recent past (<5 yrs) → block
+                            five_years_ago = _dt.today() - _td(days=5 * 365)
+                            if last_date >= five_years_ago:
+                                # Policy is active/recent — must renew, not re-register
+                                days_left = (last_date - _dt.today()).days
+                                if days_left >= 0:
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=(
+                                            f"This NIC ({req_nic}) already has an active policy "
+                                            f"({pid}) valid until {last_date}. "
+                                            f"Please use the Renewal page to renew this policy."
+                                        )
+                                    )
+                                else:
+                                    # Expired but within 5 years → still must renew
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=(
+                                            f"This NIC ({req_nic}) has an existing policy ({pid}) "
+                                            f"that expired on {last_date}. "
+                                            f"Please use the Renewal page. "
+                                            f"A new policy can only be registered if the last "
+                                            f"policy expired more than 5 years ago."
+                                        )
+                                    )
+                        except HTTPException:
+                            raise
+                        except Exception:
+                            pass  # If date parsing fails, allow registration
+
+            # ── One email per NIC: look up existing email for this NIC ─────
             if req_nic:
                 existing_email_row = conn.execute(
                     "SELECT email FROM policies WHERE nic=? AND email != '' AND email IS NOT NULL LIMIT 1",
                     (req_nic,)
                 ).fetchone()
                 if existing_email_row:
-                    # NIC already has a registered email — enforce it
                     stored_email = existing_email_row[0].strip()
-                    if req_email and req_email != stored_email:
+                    if req_email != stored_email:
                         raise HTTPException(
                             status_code=400,
                             detail=(
@@ -491,8 +547,32 @@ async def issue_policy(req: dict):
                                 f"Please use the same email address."
                             )
                         )
-                    # Use stored email (auto-populate even if user left it blank)
-                    req_email = stored_email
+
+            # ── Fix 5: First + Last name uniqueness across NICs ──────────
+            first_name = (req.get("first_name") or "").strip()
+            last_name  = (req.get("last_name")  or "").strip()
+            if first_name and last_name:
+                # Build full customer_name from parts
+                customer_name_combined = f"{first_name} {last_name}"
+                # Check if exact same first+last already exists for a DIFFERENT NIC
+                dup_row = conn.execute("""
+                    SELECT nic FROM policies
+                    WHERE LOWER(customer_name) = LOWER(?)
+                      AND nic != ?
+                    LIMIT 1
+                """, (customer_name_combined, req_nic or "")).fetchone()
+                if dup_row:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"The full name '{first_name} {last_name}' is already registered "
+                            f"under a different NIC. Both first name and last name cannot be "
+                            f"identical to another customer. Please verify the name or NIC."
+                        )
+                    )
+            else:
+                # Fall back to customer_name as provided
+                customer_name_combined = (req.get("customer_name") or "").strip()
 
             vehicle_year = int(req.get("vehicle_year", today.year))
             vehicle_age  = max(0, today.year - vehicle_year)
@@ -523,7 +603,7 @@ async def issue_policy(req: dict):
             # 59 values — same order as col_list
             vals = (
                 policy_id,                        today.isoformat(),
-                req.get("customer_name", ""),     req.get("nic", ""),
+                customer_name_combined,            req.get("nic", ""),
                 int(req.get("driver_age", 30)),   req.get("gender", "Male"),
                 req.get("occupation", "Employed"),
                 int(req.get("years_exp", 0)),     req.get("province", "Western"),
@@ -573,7 +653,7 @@ async def issue_policy(req: dict):
             shap_drivers = (req.get("explanation") or {}).get("top_drivers", [])
             email_result = send_policy_email(
                 email         = req_email,
-                customer_name = req.get("customer_name", ""),
+                customer_name = customer_name_combined,
                 policy_id     = policy_id,
                 vehicle_model = req.get("vehicle_model", ""),
                 vehicle_type  = req.get("vehicle_type", "Car"),
